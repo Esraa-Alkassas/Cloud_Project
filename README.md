@@ -1,2 +1,2 @@
 # Cloud_Project
-This is the repo for cloud research project
+This is the repo for the cloud research project
