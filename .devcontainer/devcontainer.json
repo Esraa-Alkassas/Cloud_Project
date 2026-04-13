@@ -4,9 +4,10 @@
         "dockerfile": "Dockerfile"
     },
     "runArgs": [
-        "--privileged",
-        "--device=/dev/ttyUSB0",
-        "--device=/dev/ttyACM0"
+        "--privileged"
+    ],
+    "mounts": [
+        "source=/dev,target=/dev,type=bind"
     ],
     "customizations": {
         "vscode": {
