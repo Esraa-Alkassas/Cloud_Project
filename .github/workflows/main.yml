@@ -3,7 +3,7 @@ name: CI CD pipeline
 on:
   push:
     branches:
-      - features_Automation_CI_CD
+      - feature_Automation_CI_CD
 
 
 jobs:
