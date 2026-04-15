@@ -20,8 +20,7 @@ jobs:
           target: esp32
           command: idf.py build
 
-      - name: Build firmware
-        run: idf.py build
+
       - name: Upload firmware
         uses: actions/upload-artifact@v4
         with:
