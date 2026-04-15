@@ -17,6 +17,7 @@ jobs:
         uses: espressif/esp-idf-ci-action@v1
         with:
           version: v5.1
+          target: esp32
 
       - name: Build firmware
         run: |
