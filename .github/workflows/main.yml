@@ -20,9 +20,7 @@ jobs:
           target: esp32
 
       - name: Build firmware
-        run: |
-          . $IDF_PATH/export.sh
-          idf.py build
+        run: idf.py build
       - name: Upload firmware
         uses: actions/upload-artifact@v4
         with:
