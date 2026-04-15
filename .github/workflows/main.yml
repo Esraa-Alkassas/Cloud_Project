@@ -18,6 +18,7 @@ jobs:
         with:
           version: v5.1
           target: esp32
+          command: idf.py build
 
       - name: Build firmware
         run: idf.py build
