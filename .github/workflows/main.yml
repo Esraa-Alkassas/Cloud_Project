@@ -5,14 +5,21 @@ on:
     branches:
       - feature_Automation_CI_CD
 
+# Required for OIDC connection with AWS
+permissions:
+  id-token: write
+  contents: read
 
 jobs:
   Automate:
     runs-on: ubuntu-latest
     
     steps:
+      # Step 1: Download the source code from the repository
       - name: Checkout repository
         uses: actions/checkout@v4
+
+      # Step 2: Build the ESP32 Firmware using ESP-IDF toolchain
       - name: Setup ESP-IDE
         uses: espressif/esp-idf-ci-action@v1
         with:
@@ -20,10 +27,23 @@ jobs:
           target: esp32
           command: idf.py build
 
-
-      - name: Upload firmware
+      # Step 3: Archive the built binaries as a GitHub Artifact
+      - name: Upload firmware as Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: esp32-firmware
+          name: esp32-firmware-bin
           path: build/*.bin
-        
+
+      # Step 4: Authenticate with AWS using OIDC and IAM Role
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: us-east-1 # Ensure this matches your S3 Bucket region
+          role-session-name: GitHubActionsOIDC
+
+      # Step 5: Upload the generated .bin files to Amazon S3
+      - name: Upload firmware to Amazon S3
+        run: |
+          # Syncing only .bin files from build directory to your specific S3 bucket
+          aws s3 cp build/ s3://esp32-firmware-rewaa/ --recursive --exclude "*" --include "*.bin"s
