@@ -42,8 +42,12 @@ jobs:
           aws-region: us-east-1 # Ensure this matches your S3 Bucket region
           role-session-name: GitHubActionsOIDC
 
-      # Step 5: Upload the generated .bin files to Amazon S3
+      # Step 5: List files (to debug where the .bin is)
+      - name: List files in build directory
+        run: find build -name "*.bin"
+
+      # Step 6: Upload the generated .bin files to Amazon S3
       - name: Upload firmware to Amazon S3
         run: |
-          # Syncing only .bin files from build directory to your specific S3 bucket
-          aws s3 cp build/ s3://esp32-firmware-rewaa/ --recursive --exclude "*" --include "*.bin"s
+          # Use find to locate all .bin files and upload them one by one
+          find build -name "*.bin" -exec aws s3 cp {} s3://esp32-firmware-rewaa/ \;
