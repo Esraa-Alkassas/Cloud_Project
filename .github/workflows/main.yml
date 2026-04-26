@@ -49,12 +49,15 @@ jobs:
        # Step 6: Generate Metadata and Upload to Amazon S3
       - name: Generate Metadata and Upload to S3
         run: |
-          # 1. Generate versioning and security metadata
+          # 1. Give permissions to the build directory first
+          sudo chmod -R 777 build
+          
+          # 2. Generate versioning and security metadata
           VERSION_NUM="${{ github.run_number }}"
           FILE_HASH=$(sha256sum build/wifi_station.bin | cut -d ' ' -f 1)
           
-          # 2. Create the metadata.json file
+          # 3. Create the metadata.json file
           echo "{\"version\": \"$VERSION_NUM\", \"hash\": \"$FILE_HASH\", \"file\": \"wifi_station.bin\"}" > build/metadata.json
           
-          # 3. Upload all .bin files and the metadata.json to S3
+          # 4. Upload all .bin files and the metadata.json to S3
           aws s3 cp build/ s3://esp32-firmware-rewaa/ --recursive --exclude "*" --include "*.bin" --include "metadata.json"
