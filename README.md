@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # 🚀 ESP32 WiFi Validation Project: Getting Started
 
 Welcome to the team! This repository is your introduction to ESP32 development using the official ESP-IDF (Espressif IoT Development Framework). 
@@ -129,3 +130,8 @@ I (2500) example_wifi: Successfully connected to access point!
 If you see the successful connection message, your environment is perfect and you are ready to write code.
 
 *(To exit the serial monitor at any time, press `Ctrl` + `]`)*
+=======
+# Cloud_Project
+This is the repo for the cloud research project.
+# Update Test
+>>>>>>> 06bbfd1 (Test Lambda validation)
