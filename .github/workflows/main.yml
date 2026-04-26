@@ -3,7 +3,7 @@ name: CI_CD
 on:
   push:
     branches:
-      - feature_Automation_CI_CD
+      - Integration_Github-Actions-AWS
 
 # Required for OIDC connection with AWS
 permissions:
