@@ -26,8 +26,21 @@ jobs:
           target: esp32
           command: idf.py build
 
-      # Step 3: Archive the built binaries as a GitHub Artifact
-      - name: Upload firmware as Artifact
+      - name: Install ESP32 core
+        run: |
+          arduino-cli core update-index
+          arduino-cli core install esp32:esp32
+
+      - name: Install libraries (if needed)
+        run: |
+          # Example: install any Arduino libraries your sketch depends on
+          arduino-cli lib install "ArduinoJson"
+
+      - name: Compile Arduino sketch
+        run: |
+          arduino-cli compile --fqbn esp32:esp32:esp32
+
+      - name: Upload firmware artifact
         uses: actions/upload-artifact@v4
         with:
           name: esp32-firmware-bin
