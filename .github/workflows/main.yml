@@ -6,32 +6,28 @@ on:
       - feature_Automation_CI_CD
 
 jobs:
-  Automate:
+  build:
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Setup Arduino CLI
-        uses: arduino/setup-arduino-cli@v1
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
 
-      - name: Install ESP32 core
+      - name: Install PlatformIO
         run: |
-          arduino-cli core update-index
-          arduino-cli core install esp32:esp32
+          pip install platformio
 
-      - name: Install libraries (if needed)
+      - name: Build firmware with PlatformIO
         run: |
-          # Example: install any Arduino libraries your sketch depends on
-          arduino-cli lib install "ArduinoJson"
-
-      - name: Compile Arduino sketch
-        run: |
-          arduino-cli compile --fqbn esp32:esp32:esp32
+          pio run
 
       - name: Upload firmware artifact
         uses: actions/upload-artifact@v4
         with:
           name: esp32-firmware
-          path: ./build/esp32.esp32.esp32/*.bin
+          path: .pio/build/esp32dev/firmware.bin
