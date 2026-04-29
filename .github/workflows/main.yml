@@ -5,25 +5,33 @@ on:
     branches:
       - feature_Automation_CI_CD
 
-
 jobs:
   Automate:
     runs-on: ubuntu-latest
-    
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-      - name: Setup ESP-IDE
-        uses: espressif/esp-idf-ci-action@v1
-        with:
-          version: v5.1
-          target: esp32
-          command: idf.py build
 
+      - name: Setup Arduino CLI
+        uses: arduino/setup-arduino-cli@v1
 
-      - name: Upload firmware
+      - name: Install ESP32 core
+        run: |
+          arduino-cli core update-index
+          arduino-cli core install esp32:esp32
+
+      - name: Install libraries (if needed)
+        run: |
+          # Example: install any Arduino libraries your sketch depends on
+          arduino-cli lib install "ArduinoJson"
+
+      - name: Compile Arduino sketch
+        run: |
+          arduino-cli compile --fqbn esp32:esp32:esp32 <path-to-your-sketch-folder>
+
+      - name: Upload firmware artifact
         uses: actions/upload-artifact@v4
         with:
           name: esp32-firmware
-          path: build/*.bin
-        
+          path: ./build/esp32.esp32.esp32/*.bin
