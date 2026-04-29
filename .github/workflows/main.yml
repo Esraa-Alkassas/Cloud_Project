@@ -28,7 +28,7 @@ jobs:
 
       - name: Compile Arduino sketch
         run: |
-          arduino-cli compile --fqbn esp32:esp32:esp32 <path-to-your-sketch-folder>
+          arduino-cli compile --fqbn esp32:esp32:esp32
 
       - name: Upload firmware artifact
         uses: actions/upload-artifact@v4
