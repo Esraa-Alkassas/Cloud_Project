@@ -15,7 +15,6 @@ jobs:
     runs-on: ubuntu-latest
     
     steps:
-      # Step 1: Download the source code from the repository
       - name: Checkout repository
         uses: actions/checkout@v4
 
