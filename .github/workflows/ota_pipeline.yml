@@ -70,3 +70,40 @@ jobs:
           CURRENT_FILE="${{ steps.rename-step.outputs.current_file }}"
           echo "No previous binary found. Uploading ${CURRENT_FILE} as the new baseline..."
           aws s3 cp ${CURRENT_FILE} s3://esp32-firmware-rewaa/
+
+          # Step 7: Setup Python (Required for detools)
+      - name: Setup Python
+        if: steps.s3-check.outputs.has_previous == 'true'
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      # Step 8: Subsequent Run - Generate and Upload Patch
+      - name: Generate and Upload Patch
+        if: steps.s3-check.outputs.has_previous == 'true'
+        run: |
+          # 1. Retrieve variables from previous steps
+          PREV_FILE="${{ steps.s3-check.outputs.latest_file }}"
+          CURRENT_FILE="${{ steps.rename-step.outputs.current_file }}"
+          TIMESTAMP="${{ steps.rename-step.outputs.timestamp }}"
+          PATCH_NAME="patch_${TIMESTAMP}.bin"
+          
+          # 2. Download previous binary from S3
+          echo "Downloading previous binary: ${PREV_FILE}..."
+          aws s3 cp s3://esp32-firmware-rewaa/${PREV_FILE} ./${PREV_FILE}
+          
+          # 3. Install detools
+          echo "Installing detools..."
+          pip install detools
+          
+          # 4. Generate the CRLE patch
+          echo "Generating binary delta patch (${PATCH_NAME})..."
+          detools create_patch -c crle ${PREV_FILE} ${CURRENT_FILE} ${PATCH_NAME}
+          
+          # 5. Upload the patch to S3 (This is what the ESP32 downloads)
+          echo "Uploading patch to S3..."
+          aws s3 cp ${PATCH_NAME} s3://esp32-firmware-rewaa/
+          
+          # 6. Upload the NEW full binary to S3 (To serve as the baseline for the NEXT run)
+          echo "Uploading new baseline binary to S3..."
+          aws s3 cp ${CURRENT_FILE} s3://esp32-firmware-rewaa/
