@@ -1,0 +1,31 @@
+name: ESP32 Delta OTA Pipeline
+
+# This tells GitHub to run this script every time you push to the 'main' branch
+on:
+  push:
+    branches:
+      - main 
+
+jobs:
+  build-and-patch:
+    runs-on: ubuntu-latest
+
+    steps:
+      # Step A: Gives the GitHub runner access to your code
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      # Step B: Logs into AWS using your secure secrets
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-east-1 # NOTE: Change this to your actual AWS region!
+
+      # Step C: The actual test - listing the files in your bucket
+      - name: Check S3 Bucket
+        run: |
+          echo "Checking S3 bucket for existing firmware files..."
+          # NOTE: Replace 'your-esp32-ota-bucket-name' with your actual bucket name!
+          aws s3 ls s3://your-esp32-ota-bucket-name/
