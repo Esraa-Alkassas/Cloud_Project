@@ -41,13 +41,16 @@ jobs:
           
           echo "Moving and renaming build/wifi_station.bin to ${NEW_FILENAME}..."
           
-          # Move the file out of the build folder and rename it
-          mv build/wifi_station.bin ${NEW_FILENAME}
+          # Use sudo to override the Docker root ownership
+          sudo mv build/wifi_station.bin ${NEW_FILENAME}
+          
+          # Change ownership of the new file back to the runner user
+          sudo chown $USER:$USER ${NEW_FILENAME}
           
           # Save this new filename as a GitHub variable for future steps
           echo "current_file=${NEW_FILENAME}" >> $GITHUB_OUTPUT
           echo "timestamp=${TIMESTAMP}" >> $GITHUB_OUTPUT
-
+          
       # Step 5: Check S3 for Previous Firmware
       - name: Check for Previous Firmware in S3
         id: s3-check
