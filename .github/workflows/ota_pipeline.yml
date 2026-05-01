@@ -11,17 +11,42 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      # Step 1: Gives the GitHub runner access to your code
       - name: Checkout Repository
         uses: actions/checkout@v4
 
+      # Step 2: Logs into AWS using your secure secrets
       - name: Configure AWS Credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: us-east-1 # NOTE: Change this to your actual AWS region!
+          aws-region: us-east-1 # Change to eu-central-1 etc. if the bucket is elsewhere
 
-      - name: Check S3 Bucket
+      # Step 3: Compiles the code using the official Espressif Docker container
+      - name: Build Firmware
+        uses: espressif/esp-idf-ci-action@v1
+        with:
+          esp_idf_version: v5.2
+          target: esp32
+          path: '.'
+
+      # Step 4: Logic check - Is there a previous base file to patch against?
+      - name: Check for Previous Firmware in S3
+        id: s3-check
         run: |
-          echo "Checking S3 bucket for existing firmware files..."
-          aws s3 ls s3://esp32-firmware-rewaa/
+          echo "Looking for the latest firmware in the bucket..."
+          
+          # List files, filter for files starting with 'firmware_' and ending in '.bin', sort by time, grab the newest
+          LATEST_FILE=$(aws s3 ls s3://esp32-firmware-rewaa/ | grep 'firmware_.*\.bin$' | sort | tail -n 1 | awk '{print $4}')
+          
+          if [ -z "$LATEST_FILE" ]; then
+            echo "No previous baseline binary found."
+            # Set a variable we can read in the next step
+            echo "has_previous=false" >> $GITHUB_OUTPUT
+          else
+            echo "Found previous baseline binary: $LATEST_FILE"
+            # Set variables we can read in the next step
+            echo "has_previous=true" >> $GITHUB_OUTPUT
+            echo "latest_file=$LATEST_FILE" >> $GITHUB_OUTPUT
+          fi
