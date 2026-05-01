@@ -1,103 +1,126 @@
-/* WiFi station Example
-
-   This example code is in the Public Domain (or CC0 licensed, at your option.)
-
-   Unless required by applicable law or agreed to in writing, this
-   software is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR
-   CONDITIONS OF ANY KIND, either express or implied.
-*/
 #include <string.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/event_groups.h"
 #include "esp_system.h"
-#include "esp_wifi.h"
 #include "esp_event.h"
 #include "esp_log.h"
+#include "esp_ota_ops.h"
+#include "esp_partition.h"
+#include "esp_http_client.h"
 #include "nvs_flash.h"
+#include "esp_wifi.h"
+#include "detools.h"
 
-#include "lwip/err.h"
-#include "lwip/sys.h"
+static const char *TAG = "OTA_DELTA";
 
-/* The examples use WiFi configuration that you can set via project configuration menu
+#define FIRMWARE_VERSION "3.0.0"
 
-   If you'd rather not, just change the below entries to strings with
-   the config you want - ie #define EXAMPLE_WIFI_SSID "mywifissid"
-*/
-#define EXAMPLE_ESP_WIFI_SSID      CONFIG_ESP_WIFI_SSID
-#define EXAMPLE_ESP_WIFI_PASS      CONFIG_ESP_WIFI_PASSWORD
-#define EXAMPLE_ESP_MAXIMUM_RETRY  CONFIG_ESP_MAXIMUM_RETRY
-
-#if CONFIG_ESP_WPA3_SAE_PWE_HUNT_AND_PECK
-#define ESP_WIFI_SAE_MODE WPA3_SAE_PWE_HUNT_AND_PECK
-#define EXAMPLE_H2E_IDENTIFIER ""
-#elif CONFIG_ESP_WPA3_SAE_PWE_HASH_TO_ELEMENT
-#define ESP_WIFI_SAE_MODE WPA3_SAE_PWE_HASH_TO_ELEMENT
-#define EXAMPLE_H2E_IDENTIFIER CONFIG_ESP_WIFI_PW_ID
-#elif CONFIG_ESP_WPA3_SAE_PWE_BOTH
-#define ESP_WIFI_SAE_MODE WPA3_SAE_PWE_BOTH
-#define EXAMPLE_H2E_IDENTIFIER CONFIG_ESP_WIFI_PW_ID
-#endif
-#if CONFIG_ESP_WIFI_AUTH_OPEN
-#define ESP_WIFI_SCAN_AUTH_MODE_THRESHOLD WIFI_AUTH_OPEN
-#elif CONFIG_ESP_WIFI_AUTH_WEP
-#define ESP_WIFI_SCAN_AUTH_MODE_THRESHOLD WIFI_AUTH_WEP
-#elif CONFIG_ESP_WIFI_AUTH_WPA_PSK
-#define ESP_WIFI_SCAN_AUTH_MODE_THRESHOLD WIFI_AUTH_WPA_PSK
-#elif CONFIG_ESP_WIFI_AUTH_WPA2_PSK
-#define ESP_WIFI_SCAN_AUTH_MODE_THRESHOLD WIFI_AUTH_WPA2_PSK
-#elif CONFIG_ESP_WIFI_AUTH_WPA_WPA2_PSK
-#define ESP_WIFI_SCAN_AUTH_MODE_THRESHOLD WIFI_AUTH_WPA_WPA2_PSK
-#elif CONFIG_ESP_WIFI_AUTH_WPA3_PSK
-#define ESP_WIFI_SCAN_AUTH_MODE_THRESHOLD WIFI_AUTH_WPA3_PSK
-#elif CONFIG_ESP_WIFI_AUTH_WPA2_WPA3_PSK
-#define ESP_WIFI_SCAN_AUTH_MODE_THRESHOLD WIFI_AUTH_WPA2_WPA3_PSK
-#elif CONFIG_ESP_WIFI_AUTH_WAPI_PSK
-#define ESP_WIFI_SCAN_AUTH_MODE_THRESHOLD WIFI_AUTH_WAPI_PSK
-#endif
-
-/* FreeRTOS event group to signal when we are connected*/
-static EventGroupHandle_t s_wifi_event_group;
-
-/* The event group allows multiple bits for each event, but we only care about two events:
- * - we are connected to the AP with an IP
- * - we failed to connect after the maximum amount of retries */
+static EventGroupHandle_t wifi_event_group;
 #define WIFI_CONNECTED_BIT BIT0
-#define WIFI_FAIL_BIT      BIT1
 
-static const char *TAG = "wifi station";
-
-static int s_retry_num = 0;
-
-
-static void event_handler(void* arg, esp_event_base_t event_base,
-                                int32_t event_id, void* event_data)
+struct patch_state_t
 {
-    if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_START) {
-        esp_wifi_connect();
-    } else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
-        if (s_retry_num < EXAMPLE_ESP_MAXIMUM_RETRY) {
-            esp_wifi_connect();
-            s_retry_num++;
-            ESP_LOGI(TAG, "retry to connect to the AP");
-        } else {
-            xEventGroupSetBits(s_wifi_event_group, WIFI_FAIL_BIT);
+    const esp_partition_t *old_partition;
+    const esp_partition_t *new_partition;
+    esp_ota_handle_t ota_handle;
+    esp_http_client_handle_t http_client;
+    int old_read_offset;
+};
+
+static int read_old_cb(void *arg_p, uint8_t *buf_p, size_t size)
+{
+    struct patch_state_t *state = (struct patch_state_t *)arg_p;
+
+    esp_err_t err = esp_partition_read(state->old_partition, state->old_read_offset, buf_p, size);
+    if (err != ESP_OK)
+    {
+        ESP_LOGE(TAG, "Failed to read old partition at offset %d", state->old_read_offset);
+        return -1;
+    }
+
+    state->old_read_offset += size;
+    return 0;
+}
+
+static int seek_old_cb(void *arg_p, int offset)
+{
+    struct patch_state_t *state = (struct patch_state_t *)arg_p;
+    state->old_read_offset += offset;
+    return 0;
+}
+
+static int read_patch_cb(void *arg_p, uint8_t *buf_p, size_t size)
+{
+    struct patch_state_t *state = (struct patch_state_t *)arg_p;
+    size_t total_read = 0;
+
+    while (total_read < size)
+    {
+        int read_len = esp_http_client_read(state->http_client,
+                                            (char *)(buf_p + total_read),
+                                            size - total_read);
+
+        if (read_len < 0)
+        {
+            ESP_LOGE(TAG, "HTTP read error");
+            return -1;
         }
-        ESP_LOGI(TAG,"connect to the AP fail");
-    } else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
-        ip_event_got_ip_t* event = (ip_event_got_ip_t*) event_data;
-        ESP_LOGI(TAG, "got ip:" IPSTR, IP2STR(&event->ip_info.ip));
-        s_retry_num = 0;
-        xEventGroupSetBits(s_wifi_event_group, WIFI_CONNECTED_BIT);
+
+        if (read_len == 0)
+        {
+            if (esp_http_client_is_complete_data_received(state->http_client))
+            {
+                ESP_LOGE(TAG, "HTTP stream ended before expected. File truncated?");
+                return -1;
+            }
+            vTaskDelay(pdMS_TO_TICKS(10));
+            continue;
+        }
+
+        total_read += read_len;
+    }
+
+    return 0;
+}
+
+static int write_new_cb(void *arg_p, const uint8_t *buf_p, size_t size)
+{
+    struct patch_state_t *state = (struct patch_state_t *)arg_p;
+
+    esp_err_t err = esp_ota_write(state->ota_handle, buf_p, size);
+    if (err != ESP_OK)
+    {
+        ESP_LOGE(TAG, "Failed to write to OTA partition");
+        return -1;
+    }
+
+    return 0;
+}
+
+static void event_handler(void *arg, esp_event_base_t event_base, int32_t event_id, void *event_data)
+{
+    if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_START)
+    {
+        esp_wifi_connect();
+    }
+    else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED)
+    {
+        ESP_LOGW(TAG, "Wi-Fi disconnected. Retrying...");
+        esp_wifi_connect();
+    }
+    else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP)
+    {
+        ip_event_got_ip_t *event = (ip_event_got_ip_t *)event_data;
+        ESP_LOGI(TAG, "Got IP: " IPSTR, IP2STR(&event->ip_info.ip));
+        xEventGroupSetBits(wifi_event_group, WIFI_CONNECTED_BIT);
     }
 }
 
-void wifi_init_sta(void)
+static void wifi_init_sta(void)
 {
-    s_wifi_event_group = xEventGroupCreate();
-
+    wifi_event_group = xEventGroupCreate();
     ESP_ERROR_CHECK(esp_netif_init());
-
     ESP_ERROR_CHECK(esp_event_loop_create_default());
     esp_netif_create_default_wifi_sta();
 
@@ -106,74 +129,152 @@ void wifi_init_sta(void)
 
     esp_event_handler_instance_t instance_any_id;
     esp_event_handler_instance_t instance_got_ip;
-    ESP_ERROR_CHECK(esp_event_handler_instance_register(WIFI_EVENT,
-                                                        ESP_EVENT_ANY_ID,
-                                                        &event_handler,
-                                                        NULL,
-                                                        &instance_any_id));
-    ESP_ERROR_CHECK(esp_event_handler_instance_register(IP_EVENT,
-                                                        IP_EVENT_STA_GOT_IP,
-                                                        &event_handler,
-                                                        NULL,
-                                                        &instance_got_ip));
+    ESP_ERROR_CHECK(esp_event_handler_instance_register(WIFI_EVENT, ESP_EVENT_ANY_ID, &event_handler, NULL, &instance_any_id));
+    ESP_ERROR_CHECK(esp_event_handler_instance_register(IP_EVENT, IP_EVENT_STA_GOT_IP, &event_handler, NULL, &instance_got_ip));
 
     wifi_config_t wifi_config = {
         .sta = {
-            .ssid = EXAMPLE_ESP_WIFI_SSID,
-            .password = EXAMPLE_ESP_WIFI_PASS,
-            /* Authmode threshold resets to WPA2 as default if password matches WPA2 standards (pasword len => 8).
-             * If you want to connect the device to deprecated WEP/WPA networks, Please set the threshold value
-             * to WIFI_AUTH_WEP/WIFI_AUTH_WPA_PSK and set the password with length and format matching to
-             * WIFI_AUTH_WEP/WIFI_AUTH_WPA_PSK standards.
-             */
-            .threshold.authmode = ESP_WIFI_SCAN_AUTH_MODE_THRESHOLD,
-            .sae_pwe_h2e = ESP_WIFI_SAE_MODE,
-            .sae_h2e_identifier = EXAMPLE_H2E_IDENTIFIER,
+            .ssid = CONFIG_ESP_WIFI_SSID,
+            .password = CONFIG_ESP_WIFI_PASSWORD,
+            .threshold.authmode = WIFI_AUTH_WPA2_PSK,
         },
     };
-    ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA) );
-    ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_config) );
-    ESP_ERROR_CHECK(esp_wifi_start() );
 
-    ESP_LOGI(TAG, "wifi_init_sta finished.");
+    ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
+    ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_config));
+    ESP_ERROR_CHECK(esp_wifi_start());
 
-    /* Waiting until either the connection is established (WIFI_CONNECTED_BIT) or connection failed for the maximum
-     * number of re-tries (WIFI_FAIL_BIT). The bits are set by event_handler() (see above) */
-    EventBits_t bits = xEventGroupWaitBits(s_wifi_event_group,
-            WIFI_CONNECTED_BIT | WIFI_FAIL_BIT,
-            pdFALSE,
-            pdFALSE,
-            portMAX_DELAY);
+    ESP_LOGI(TAG, "Wi-Fi initialized. Waiting for connection...");
+    xEventGroupWaitBits(wifi_event_group, WIFI_CONNECTED_BIT, pdFALSE, pdFALSE, portMAX_DELAY);
+}
 
-    /* xEventGroupWaitBits() returns the bits before the call returned, hence we can test which event actually
-     * happened. */
-    if (bits & WIFI_CONNECTED_BIT) {
-        ESP_LOGI(TAG, "connected to ap SSID:%s password:%s",
-                 EXAMPLE_ESP_WIFI_SSID, EXAMPLE_ESP_WIFI_PASS);
-    } else if (bits & WIFI_FAIL_BIT) {
-        ESP_LOGI(TAG, "Failed to connect to SSID:%s, password:%s",
-                 EXAMPLE_ESP_WIFI_SSID, EXAMPLE_ESP_WIFI_PASS);
-    } else {
-        ESP_LOGE(TAG, "UNEXPECTED EVENT");
+void trigger_delta_ota_update(void)
+{
+    ESP_LOGI(TAG, "Starting Delta OTA update sequence...");
+    struct patch_state_t state = {0};
+    esp_err_t err;
+
+    state.old_partition = esp_ota_get_running_partition();
+    state.new_partition = esp_ota_get_next_update_partition(NULL);
+
+    if (state.old_partition == NULL || state.new_partition == NULL)
+    {
+        ESP_LOGE(TAG, "Could not find valid partitions. Check partitions.csv.");
+        return;
+    }
+
+    ESP_LOGI(TAG, "Reading from: %s, Rebuilding into: %s",
+             state.old_partition->label, state.new_partition->label);
+
+    esp_http_client_config_t config = {
+        .url = "http://10.89.227.59:8000/patch.bin", // REPLACE WITH YOUR SERVER IP
+        .keep_alive_enable = true,
+    };
+    state.http_client = esp_http_client_init(&config);
+
+    err = esp_http_client_open(state.http_client, 0);
+    if (err != ESP_OK)
+    {
+        ESP_LOGE(TAG, "Failed to open HTTP connection: %s", esp_err_to_name(err));
+        esp_http_client_cleanup(state.http_client);
+        return;
+    }
+
+    esp_http_client_fetch_headers(state.http_client);
+    int status_code = esp_http_client_get_status_code(state.http_client);
+    if (status_code != 200)
+    {
+        ESP_LOGE(TAG, "Invalid HTTP status code: %d. File not found?", status_code);
+        esp_http_client_cleanup(state.http_client);
+        return;
+    }
+
+    int patch_size = esp_http_client_get_content_length(state.http_client);
+    if (patch_size <= 0)
+    {
+        ESP_LOGE(TAG, "Server did not provide Content-Length. Cannot proceed.");
+        esp_http_client_cleanup(state.http_client);
+        return;
+    }
+    ESP_LOGI(TAG, "Incoming patch size: %d bytes", patch_size);
+
+    err = esp_ota_begin(state.new_partition, OTA_WITH_SEQUENTIAL_WRITES, &state.ota_handle);
+    if (err != ESP_OK)
+    {
+        ESP_LOGE(TAG, "esp_ota_begin failed: %s", esp_err_to_name(err));
+        esp_http_client_cleanup(state.http_client);
+        return;
+    }
+
+    ESP_LOGI(TAG, "Applying Binary Patch...");
+    int patch_res = detools_apply_patch_callbacks(read_old_cb,
+                                                  seek_old_cb,
+                                                  read_patch_cb,
+                                                  patch_size,
+                                                  write_new_cb,
+                                                  &state);
+
+    esp_http_client_cleanup(state.http_client);
+
+    if (patch_res >= 0)
+    {
+        ESP_LOGI(TAG, "Patch Applied Successfully! Finalizing...");
+
+        err = esp_ota_end(state.ota_handle);
+        if (err == ESP_OK)
+        {
+            err = esp_ota_set_boot_partition(state.new_partition);
+            if (err == ESP_OK)
+            {
+                ESP_LOGI(TAG, "Boot partition set. Rebooting in 2 seconds...");
+                vTaskDelay(pdMS_TO_TICKS(2000));
+                esp_restart();
+            }
+            else
+            {
+                ESP_LOGE(TAG, "Failed to set boot partition: %s", esp_err_to_name(err));
+            }
+        }
+        else
+        {
+            ESP_LOGE(TAG, "esp_ota_end failed! Firmware may be corrupted: %s", esp_err_to_name(err));
+        }
+    }
+    else
+    {
+        ESP_LOGE(TAG, "Detools patching failed with error code: %d", patch_res);
+        esp_ota_abort(state.ota_handle);
+    }
+}
+
+void print_version_task(void *pvParameter)
+{
+    while (1)
+    {
+        ESP_LOGW(TAG, "=== Running Firmware Version: %s ===", FIRMWARE_VERSION);
+        vTaskDelay(pdMS_TO_TICKS(5000)); // Delay for 5000 milliseconds (5 seconds)
     }
 }
 
 void app_main(void)
 {
-    //Initialize NVS
     esp_err_t ret = nvs_flash_init();
-    if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
-      ESP_ERROR_CHECK(nvs_flash_erase());
-      ret = nvs_flash_init();
+    if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND)
+    {
+        ESP_ERROR_CHECK(nvs_flash_erase());
+        ret = nvs_flash_init();
     }
     ESP_ERROR_CHECK(ret);
 
-    if (CONFIG_LOG_MAXIMUM_LEVEL > CONFIG_LOG_DEFAULT_LEVEL) {
-        /* If you only want to open more logs in the wifi module, you need to make the max level greater than the default level,
-         * and call esp_log_level_set() before esp_wifi_init() to improve the log level of the wifi module. */
-        esp_log_level_set("wifi", CONFIG_LOG_MAXIMUM_LEVEL);
-    }
+    esp_ota_mark_app_valid_cancel_rollback();
+    ESP_LOGI(TAG, "Application state marked as valid.");
 
-    ESP_LOGI(TAG, "ESP_WIFI_MODE_STA");
+    xTaskCreate(&print_version_task, "print_version_task", 2048, NULL, 5, NULL);
+
     wifi_init_sta();
+
+    ESP_LOGI(TAG, "Network stable. Preparing to pull firmware in 5 seconds...");
+    vTaskDelay(pdMS_TO_TICKS(5000));
+
+    trigger_delta_ota_update();
 }

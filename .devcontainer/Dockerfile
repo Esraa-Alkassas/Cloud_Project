@@ -13,6 +13,10 @@ RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y \
     usbutils \
     && rm -rf /var/lib/apt/lists/*
 
+RUN apt-get update && apt-get install -y python3-dev
+# We use bash -c to source the environment variables, then chain the pip command
+RUN bash -c "source /opt/esp/idf/export.sh && pip install --no-cache-dir detools"
+
 RUN echo 'source /opt/esp/idf/export.sh' >> /root/.bashrc
 
 WORKDIR /workspace
