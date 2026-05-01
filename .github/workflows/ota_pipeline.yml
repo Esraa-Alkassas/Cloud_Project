@@ -5,6 +5,7 @@ on:
   push:
     branches:
       - feature/docker-env
+  workflow_dispatch:
 
 jobs:
   build-and-patch:
