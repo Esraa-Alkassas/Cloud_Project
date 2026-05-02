@@ -306,6 +306,7 @@ void print_version_task(void *pvParameter)
 
 void app_main(void)
 {
+    volatile uint8_t dummy_counter = 0;
     esp_err_t ret = nvs_flash_init();
     if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND)
     {
@@ -326,6 +327,7 @@ void app_main(void)
 
     while (1)
     {
+        dummy_counter++; // this is a dummy counter to tigger ota update .
         trigger_delta_ota_update();
         vTaskDelay(pdMS_TO_TICKS(32000));
     }
