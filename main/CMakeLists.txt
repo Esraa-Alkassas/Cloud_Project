@@ -10,4 +10,8 @@ idf_component_register(
         esp_wifi  
         esp_event 
         esp_netif 
+        mbedtls            
+        json               
+        bootloader_support 
+        driver
 )
