@@ -56,7 +56,7 @@ void led_blink_task(void *pvParameter)
         gpio_set_level(LED_PIN_BLUE, 0);
         vTaskDelay(pdMS_TO_TICKS(500));
 
-        gpio_set_level(LED_PIN_RED, 0);
+        gpio_set_level(LED_PIN_RED, 1);
         gpio_set_level(LED_PIN_GREEN, 1);
         gpio_set_level(LED_PIN_BLUE, 0);
         vTaskDelay(pdMS_TO_TICKS(500));
@@ -124,13 +124,22 @@ static int write_new_cb(void *arg_p, const uint8_t *buf_p, size_t size)
 static void event_handler(void *arg, esp_event_base_t event_base, int32_t event_id, void *event_data)
 {
     if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_START)
+    {
         esp_wifi_connect();
+    }
     else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED)
+    {
+        // --- ADDED THIS ---
+        // Explicitly clear the connected bit so the OTA loop pauses
+        xEventGroupClearBits(wifi_event_group, WIFI_CONNECTED_BIT);
+        ESP_LOGE(TAG, "Wi-Fi disconnected! Pausing OTA checks until reconnected...");
         esp_wifi_connect();
+    }
     else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP)
     {
         ip_event_got_ip_t *event = (ip_event_got_ip_t *)event_data;
         ESP_LOGI(TAG, "Got IP: " IPSTR, IP2STR(&event->ip_info.ip));
+        // Set the bit to unfreeze the OTA loop
         xEventGroupSetBits(wifi_event_group, WIFI_CONNECTED_BIT);
     }
 }
@@ -165,7 +174,6 @@ static void wifi_init_sta(void)
     esp_wifi_set_ps(WIFI_PS_NONE);
 
     ESP_LOGI(TAG, "Wi-Fi initialized. Waiting for connection...");
-    xEventGroupWaitBits(wifi_event_group, WIFI_CONNECTED_BIT, pdFALSE, pdFALSE, portMAX_DELAY);
 }
 
 // ==========================================
@@ -175,12 +183,9 @@ void trigger_delta_ota_update(void)
 {
     ESP_LOGI(TAG, "Starting Delta OTA update sequence...");
 
-    // Read baked-in version
     const esp_app_desc_t *app_desc = esp_app_get_description();
 
     // --- TESTING HACK ---
-    // Force the version to "1" so the Lambda gives us an update.
-    // When you are done testing, change this back to: app_desc->version
     const char *current_version = "1";
     // --------------------
 
@@ -309,6 +314,7 @@ void print_version_task(void *pvParameter)
 
 void app_main(void)
 {
+    // Mute the noisy Wi-Fi state logs
     esp_log_level_set("wifi", ESP_LOG_ERROR);
 
     volatile uint8_t dummy_counter = 0;
@@ -320,7 +326,6 @@ void app_main(void)
     }
     ESP_ERROR_CHECK(ret);
 
-    // Safely check if we booted from factory partition before validating OTA
     const esp_partition_t *running_partition = esp_ota_get_running_partition();
     if (running_partition->subtype != ESP_PARTITION_SUBTYPE_APP_FACTORY)
     {
@@ -332,18 +337,19 @@ void app_main(void)
         ESP_LOGI(TAG, "Running from factory partition. Skipping OTA validation.");
     }
 
-    // Start the Background Tasks
     xTaskCreate(&print_version_task, "print_version_task", 2048, NULL, 5, NULL);
     xTaskCreate(&led_blink_task, "led_blink_task", 2048, NULL, 5, NULL);
 
     wifi_init_sta();
 
-    vTaskDelay(pdMS_TO_TICKS(5000));
-
     while (1)
     {
-        dummy_counter += 2;
+        xEventGroupWaitBits(wifi_event_group, WIFI_CONNECTED_BIT, pdFALSE, pdTRUE, portMAX_DELAY);
+
+        dummy_counter++;
         trigger_delta_ota_update();
+
+        // Wait 32 seconds before checking again
         vTaskDelay(pdMS_TO_TICKS(32000));
     }
 }
