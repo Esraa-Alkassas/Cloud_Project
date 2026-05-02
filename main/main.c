@@ -42,7 +42,6 @@ struct patch_state_t
 // ==========================================
 void led_blink_task(void *pvParameter)
 {
-    // Configure pins as outputs
     gpio_reset_pin(LED_PIN_RED);
     gpio_reset_pin(LED_PIN_GREEN);
     gpio_reset_pin(LED_PIN_BLUE);
@@ -52,9 +51,6 @@ void led_blink_task(void *pvParameter)
 
     while (1)
     {
-        // Simple Demo Sequence: Red -> Green -> Blue
-        // Change this sequence in future commits to verify the OTA update worked!
-
         gpio_set_level(LED_PIN_RED, 1);
         gpio_set_level(LED_PIN_GREEN, 0);
         gpio_set_level(LED_PIN_BLUE, 0);
@@ -181,10 +177,17 @@ void trigger_delta_ota_update(void)
 
     // Read baked-in version
     const esp_app_desc_t *app_desc = esp_app_get_description();
-    ESP_LOGI(TAG, "Current Firmware Hash: %s", app_desc->version);
+
+    // --- TESTING HACK ---
+    // Force the version to "1" so the Lambda gives us an update.
+    // When you are done testing, change this back to: app_desc->version
+    const char *current_version = "1";
+    // --------------------
+
+    ESP_LOGI(TAG, "Checking for updates... Sending Hash: [%s] (Real Hash: %s)", current_version, app_desc->version);
 
     char api_url[512];
-    snprintf(api_url, sizeof(api_url), "%s?hash=%s", API_GATEWAY_URL, app_desc->version);
+    snprintf(api_url, sizeof(api_url), "%s?hash=%s", API_GATEWAY_URL, current_version);
 
     esp_http_client_config_t api_config = {
         .url = api_url,
@@ -306,6 +309,8 @@ void print_version_task(void *pvParameter)
 
 void app_main(void)
 {
+    esp_log_level_set("wifi", ESP_LOG_ERROR);
+
     volatile uint8_t dummy_counter = 0;
     esp_err_t ret = nvs_flash_init();
     if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND)
@@ -315,7 +320,17 @@ void app_main(void)
     }
     ESP_ERROR_CHECK(ret);
 
-    esp_ota_mark_app_valid_cancel_rollback();
+    // Safely check if we booted from factory partition before validating OTA
+    const esp_partition_t *running_partition = esp_ota_get_running_partition();
+    if (running_partition->subtype != ESP_PARTITION_SUBTYPE_APP_FACTORY)
+    {
+        esp_ota_mark_app_valid_cancel_rollback();
+        ESP_LOGI(TAG, "Application state marked as valid.");
+    }
+    else
+    {
+        ESP_LOGI(TAG, "Running from factory partition. Skipping OTA validation.");
+    }
 
     // Start the Background Tasks
     xTaskCreate(&print_version_task, "print_version_task", 2048, NULL, 5, NULL);
@@ -327,7 +342,7 @@ void app_main(void)
 
     while (1)
     {
-        dummy_counter++; // this is a dummy counter to tigger ota update .
+        dummy_counter += 2;
         trigger_delta_ota_update();
         vTaskDelay(pdMS_TO_TICKS(32000));
     }
