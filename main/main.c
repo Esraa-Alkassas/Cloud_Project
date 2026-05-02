@@ -320,8 +320,11 @@ void app_main(void)
 
     wifi_init_sta();
 
-    ESP_LOGI(TAG, "Network stable. Checking orchestrator for updates in 5 seconds...");
     vTaskDelay(pdMS_TO_TICKS(5000));
 
-    trigger_delta_ota_update();
+    while (1)
+    {
+        trigger_delta_ota_update();
+        vTaskDelay(pdMS_TO_TICKS(32000));
+    }
 }
