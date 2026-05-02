@@ -21,7 +21,7 @@ static const char *TAG = "OTA_DELTA";
 
 #define API_GATEWAY_URL "https://kavm965brg.execute-api.us-east-1.amazonaws.com/check"
 
-#define LED_PIN_RED GPIO_NUM_1
+#define LED_PIN_RED GPIO_NUM_21
 #define LED_PIN_GREEN GPIO_NUM_23
 #define LED_PIN_BLUE GPIO_NUM_22
 
