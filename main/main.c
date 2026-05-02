@@ -129,8 +129,6 @@ static void event_handler(void *arg, esp_event_base_t event_base, int32_t event_
     }
     else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED)
     {
-        // --- ADDED THIS ---
-        // Explicitly clear the connected bit so the OTA loop pauses
         xEventGroupClearBits(wifi_event_group, WIFI_CONNECTED_BIT);
         ESP_LOGE(TAG, "Wi-Fi disconnected! Pausing OTA checks until reconnected...");
         esp_wifi_connect();
@@ -139,7 +137,6 @@ static void event_handler(void *arg, esp_event_base_t event_base, int32_t event_
     {
         ip_event_got_ip_t *event = (ip_event_got_ip_t *)event_data;
         ESP_LOGI(TAG, "Got IP: " IPSTR, IP2STR(&event->ip_info.ip));
-        // Set the bit to unfreeze the OTA loop
         xEventGroupSetBits(wifi_event_group, WIFI_CONNECTED_BIT);
     }
 }
@@ -185,14 +182,10 @@ void trigger_delta_ota_update(void)
 
     const esp_app_desc_t *app_desc = esp_app_get_description();
 
-    // --- TESTING HACK ---
-    const char *current_version = "1";
-    // --------------------
-
-    ESP_LOGI(TAG, "Checking for updates... Sending Hash: [%s] (Real Hash: %s)", current_version, app_desc->version);
+    ESP_LOGI(TAG, "Checking for updates... Sending Hash: [%s]", app_desc->version);
 
     char api_url[512];
-    snprintf(api_url, sizeof(api_url), "%s?hash=%s", API_GATEWAY_URL, current_version);
+    snprintf(api_url, sizeof(api_url), "%s?hash=%s", API_GATEWAY_URL, app_desc->version);
 
     esp_http_client_config_t api_config = {
         .url = api_url,
@@ -215,6 +208,25 @@ void trigger_delta_ota_update(void)
     if (status_code != 200 || content_length <= 0)
     {
         ESP_LOGE(TAG, "Invalid API response. Status: %d", status_code);
+
+        ESP_LOGE(TAG, "Attempted URL: %s", api_url);
+
+        if (content_length > 0)
+        {
+            char *error_buffer = malloc(content_length + 1);
+            int read_len = esp_http_client_read(api_client, error_buffer, content_length);
+            if (read_len >= 0)
+            {
+                error_buffer[read_len] = '\0';
+                ESP_LOGE(TAG, "AWS Error Message: %s", error_buffer);
+            }
+            free(error_buffer);
+        }
+        else
+        {
+            ESP_LOGE(TAG, "AWS did not send an error body.");
+        }
+
         esp_http_client_cleanup(api_client);
         return;
     }
