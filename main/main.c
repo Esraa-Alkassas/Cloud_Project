@@ -267,6 +267,8 @@ void trigger_delta_ota_update(void)
         .url = download_url->valuestring,
         .crt_bundle_attach = esp_crt_bundle_attach,
         .keep_alive_enable = true,
+        .buffer_size = 4096,
+        .buffer_size_tx = 4096,
     };
     state.http_client = esp_http_client_init(&s3_config);
     cJSON_Delete(json);
