@@ -1,0 +1,25 @@
+# ESP-IDF Build Output
+build/
+
+# ESP-IDF Configuration
+sdkconfig
+sdkconfig.old
+
+# ESP Component Manager
+managed_components/
+
+# Python cache files (ESP-IDF runs on Python)
+__pycache__/
+*.py[cod]
+*$py.class
+
+# OS Generated Files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+version.txt

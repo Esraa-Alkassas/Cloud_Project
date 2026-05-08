@@ -1,0 +1,33 @@
+{
+    "name": "ESP-IDF Team Environment",
+    "build": {
+        "dockerfile": "Dockerfile"
+    },
+    "runArgs": [
+        "--privileged"
+    ],
+    "mounts": [
+        "source=/dev,target=/dev,type=bind"
+    ],
+    "customizations": {
+        "vscode": {
+            "settings": {
+                "terminal.integrated.defaultProfile.linux": "bash",
+                "idf.espIdfPath": "/opt/esp/idf",
+                "idf.customExtraPaths": "",
+                "idf.customExtraVars": "",
+                "idf.adapterTargetName": "esp32",
+                "editor.formatOnSave": true
+            },
+            "extensions": [
+                "ms-vscode.cpptools",
+                "ms-vscode.cpptools-extension-pack",
+                "ms-vscode.cmake-tools",
+                "twxs.cmake",
+                "eamodio.gitlens",
+                "espressif.esp-idf-extension"
+            ]
+        }
+    },
+    "remoteUser": "root"
+}

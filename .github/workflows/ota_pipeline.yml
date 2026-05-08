@@ -1,0 +1,152 @@
+name: Development OTA Pipeline
+
+on:
+  push:
+    branches:
+      - feature_Automation_CI_CD
+
+  workflow_dispatch:
+
+jobs:
+  build-and-patch-dev:
+
+    runs-on: ubuntu-latest
+
+    steps:
+
+      # -------------------------------------------------------
+      # 1. Checkout Repository
+      # -------------------------------------------------------
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      # -------------------------------------------------------
+      # 2. Configure AWS Credentials
+      # -------------------------------------------------------
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-east-1
+
+      # -------------------------------------------------------
+      # 3. Set Firmware Version
+      # -------------------------------------------------------
+      - name: Set Firmware Version
+        id: set-version
+        run: |
+          DEV_VERSION="${GITHUB_RUN_NUMBER}"
+          echo "$DEV_VERSION" > version.txt
+          echo "Building dev version: $DEV_VERSION"
+          echo "dev_version=$DEV_VERSION" >> $GITHUB_OUTPUT
+
+      # -------------------------------------------------------
+      # 4. Build Firmware
+      # -------------------------------------------------------
+      - name: Build Firmware
+        uses: espressif/esp-idf-ci-action@v1
+        with:
+          esp_idf_version: v5.2
+          target: esp32
+          path: '.'
+
+      # -------------------------------------------------------
+      # 5. Rename Build Output
+      # -------------------------------------------------------
+      - name: Rename Build Output
+        run: |
+          DEV_VERSION="${{ steps.set-version.outputs.dev_version }}"
+          sudo mv build/wifi_station.bin build_${DEV_VERSION}.bin
+          sudo chown $USER:$USER build_${DEV_VERSION}.bin
+
+      # -------------------------------------------------------
+      # 6. Upload Firmware Artifact (GitHub)
+      # -------------------------------------------------------
+      - name: Upload Firmware Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: firmware-bin
+          path: build_${{ steps.set-version.outputs.dev_version }}.bin
+
+      # -------------------------------------------------------
+      # 7. Setup Python
+      # -------------------------------------------------------
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      # -------------------------------------------------------
+      # 8. Install Dependencies
+      # -------------------------------------------------------
+      - name: Install Python Packages
+        run: |
+          pip install detools
+          pip install ascon
+
+      # -------------------------------------------------------
+      # 9. Generate + Encrypt OTA Delta Patches
+      # -------------------------------------------------------
+      - name: Generate and Encrypt OTA Delta Patches
+        run: |
+          LATEST_VER="${{ steps.set-version.outputs.dev_version }}"
+          NEW_FILE="build_${LATEST_VER}.bin"
+          KEY_HEX="9dd0a36a24bbc198ea0930324aaccae6"
+          NONCE_HEX="a18c565c6c110f278c03c2b6ed3667c5"
+
+          echo "Fetching previous baselines from S3..."
+          PREVIOUS_BUILDS=$(aws s3 ls s3://esp32-firmware-rewaa/ | grep 'build_[0-9]*\.bin$' | awk '{print $4}')
+
+          if [ -z "$PREVIOUS_BUILDS" ]; then
+            echo "No previous builds found."
+          else
+            for OLD_FILE in $PREVIOUS_BUILDS; do
+              echo "Downloading old firmware: $OLD_FILE"
+              aws s3 cp s3://esp32-firmware-rewaa/${OLD_FILE} ./${OLD_FILE}
+              OLD_VER=$(echo $OLD_FILE | sed -E 's/build_([0-9]+)\.bin/\1/')
+              PATCH_NAME="patch_${OLD_VER}_to_${LATEST_VER}.bin"
+              ENCRYPTED_PATCH="patch_${OLD_VER}_to_${LATEST_VER}.enc"
+
+              echo "Generating delta patch..."
+              detools create_patch -c crle ${OLD_FILE} ${NEW_FILE} ${PATCH_NAME}
+
+              echo "Encrypting delta patch using ASCON-128 AEAD..."
+              python3 <<EOF
+          from ascon import encrypt
+          KEY = bytes.fromhex("${KEY_HEX}")
+          NONCE = bytes.fromhex("${NONCE_HEX}")
+          ASSOCIATED_DATA = b"OTA_PATCH"
+          input_file = "${PATCH_NAME}"
+          output_file = "${ENCRYPTED_PATCH}"
+          with open(input_file, "rb") as f:
+              plaintext = f.read()
+          ciphertext = encrypt(KEY, NONCE, ASSOCIATED_DATA, plaintext)
+          with open(output_file, "wb") as f:
+              f.write(ciphertext)
+          print(f"Encrypted patch saved to: {output_file}")
+          EOF
+
+              echo "Uploading encrypted patch..."
+              aws s3 cp ${ENCRYPTED_PATCH} s3://esp32-firmware-rewaa/
+            done
+          fi
+
+      # -------------------------------------------------------
+      # 10. Upload Encrypted Patches (GitHub)
+      # -------------------------------------------------------
+      - name: Upload Encrypted Patches
+        uses: actions/upload-artifact@v4
+        with:
+          name: ota-patches
+          path: "*.enc"
+
+      # -------------------------------------------------------
+      # 11. Upload Latest Baseline Firmware (S3)
+      # -------------------------------------------------------
+      - name: Upload Latest Firmware Baseline
+        run: |
+          LATEST_VER="${{ steps.set-version.outputs.dev_version }}"
+          NEW_FILE="build_${LATEST_VER}.bin"
+          echo "Uploading latest baseline firmware..."
+          aws s3 cp ${NEW_FILE} s3://esp32-firmware-rewaa/
