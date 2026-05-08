@@ -1,10 +1,9 @@
 name: Development OTA Pipeline
 
-
 on:
   push:
     branches:
-      - feature/docker-env  # Update this to your active working branch
+      - feature_Automation_CI_CD  # Update this to your active working branch
   workflow_dispatch:
 
 jobs:
