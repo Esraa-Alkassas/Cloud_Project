@@ -134,4 +134,7 @@ If you see the successful connection message, your environment is perfect and yo
 # Cloud_Project
 This is the repo for the cloud research project.
 # Update Test
+<<<<<<< HEAD
 >>>>>>> 06bbfd1 (Test Lambda validation)
+=======
+>>>>>>> 8c92b6fe358d5b82689eaac3a1cfea989faeea3a
