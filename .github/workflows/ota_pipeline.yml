@@ -124,32 +124,32 @@ jobs:
 
               python3 <<EOF
 
-              from ascon import encrypt
+          from ascon import encrypt
 
-              KEY = bytes.fromhex("${KEY_HEX}")
-              NONCE = bytes.fromhex("${NONCE_HEX}")
+          KEY = bytes.fromhex("${KEY_HEX}")
+          NONCE = bytes.fromhex("${NONCE_HEX}")
 
-              ASSOCIATED_DATA = b"OTA_PATCH"
+          ASSOCIATED_DATA = b"OTA_PATCH"
 
-              input_file = "${PATCH_NAME}"
-              output_file = "${ENCRYPTED_PATCH}"
+          input_file = "${PATCH_NAME}"
+          output_file = "${ENCRYPTED_PATCH}"
 
-              with open(input_file, "rb") as f:
-                  plaintext = f.read()
+          with open(input_file, "rb") as f:
+              plaintext = f.read()
 
-              ciphertext = encrypt(
-                  KEY,
-                  NONCE,
-                  ASSOCIATED_DATA,
-                  plaintext
-              )
+          ciphertext = encrypt(
+              KEY,
+              NONCE,
+              ASSOCIATED_DATA,
+              plaintext
+          )
 
-              with open(output_file, "wb") as f:
-                  f.write(ciphertext)
+          with open(output_file, "wb") as f:
+              f.write(ciphertext)
 
-              print(f"Encrypted patch saved to: {output_file}")
+          print(f"Encrypted patch saved to: {output_file}")
 
-              EOF
+          EOF
 
               echo "Uploading encrypted patch..."
 
