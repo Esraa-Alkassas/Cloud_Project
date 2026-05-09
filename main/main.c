@@ -76,16 +76,16 @@ void led_blink_task(void *pvParameter)
     {
         // State 1: Red/Green ON
         gpio_set_level(LED_PIN_RED, 1);
-        gpio_set_level(LED_PIN_GREEN, 0);
+        gpio_set_level(LED_PIN_GREEN, 1);
         gpio_set_level(LED_PIN_BLUE, 0);
-        send_led_telemetry(1, 0, 0);
+        send_led_telemetry(1, 1, 0);
         vTaskDelay(pdMS_TO_TICKS(1000));
 
         // State 2: Green ON
-        gpio_set_level(LED_PIN_RED, 0);
+        gpio_set_level(LED_PIN_RED, 1);
         gpio_set_level(LED_PIN_GREEN, 1);
         gpio_set_level(LED_PIN_BLUE, 0);
-        send_led_telemetry(0, 1, 0);
+        send_led_telemetry(1, 1, 0);
         vTaskDelay(pdMS_TO_TICKS(1000));
 
         // State 3: Blue ON
