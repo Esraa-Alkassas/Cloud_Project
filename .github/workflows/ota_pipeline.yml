@@ -1,9 +1,9 @@
-name: Development OTA Pipeline
+name: ESP32 Delta OTA Pipeline
 
 on:
   push:
     branches:
-      - feature/docker-env  # Update this to your active working branch
+      - '**'
   workflow_dispatch:
 
 jobs:
