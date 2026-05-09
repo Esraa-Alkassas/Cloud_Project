@@ -86,14 +86,14 @@ void led_blink_task(void *pvParameter)
         gpio_set_level(LED_PIN_GREEN, 1);
         gpio_set_level(LED_PIN_BLUE, 0);
         send_led_telemetry(0, 1, 0);
-        vTaskDelay(pdMS_TO_TICKS(500));
+        vTaskDelay(pdMS_TO_TICKS(1000));
 
         // State 3: Blue ON
         gpio_set_level(LED_PIN_RED, 0);
         gpio_set_level(LED_PIN_GREEN, 0);
         gpio_set_level(LED_PIN_BLUE, 1);
         send_led_telemetry(0, 0, 1);
-        vTaskDelay(pdMS_TO_TICKS(250));
+        vTaskDelay(pdMS_TO_TICKS(1000));
     }
 }
 
@@ -147,7 +147,8 @@ static int read_old_cb(void *arg_p, uint8_t *buf_p, size_t size)
 static int seek_old_cb(void *arg_p, int offset)
 {
     struct patch_state_t *state = (struct patch_state_t *)arg_p;
-    state->old_read_offset += offset;
+    // FIXED: Seek is absolute from the beginning, not relative.
+    state->old_read_offset = offset;
     return 0;
 }
 
@@ -309,6 +310,16 @@ void trigger_delta_ota_update(void)
     }
 
     esp_http_client_fetch_headers(state.http_client);
+
+    // Validate S3 HTTP Status before patching
+    int s3_status = esp_http_client_get_status_code(state.http_client);
+    if (s3_status != 200)
+    {
+        ESP_LOGE(TAG, "S3 returned HTTP %d. Aborting.", s3_status);
+        esp_http_client_cleanup(state.http_client);
+        return;
+    }
+
     int patch_size = esp_http_client_get_content_length(state.http_client);
 
     err = esp_ota_begin(state.new_partition, OTA_WITH_SEQUENTIAL_WRITES, &state.ota_handle);
@@ -318,17 +329,20 @@ void trigger_delta_ota_update(void)
         return;
     }
 
+    ESP_LOGI(TAG, "Starting detools patch application...");
     int patch_res = detools_apply_patch_callbacks(read_old_cb, seek_old_cb, read_patch_cb, patch_size, write_new_cb, &state);
     esp_http_client_cleanup(state.http_client);
 
     if (patch_res >= 0)
     {
+        ESP_LOGI(TAG, "Patch applied successfully. Rebooting...");
         esp_ota_end(state.ota_handle);
         esp_ota_set_boot_partition(state.new_partition);
         esp_restart();
     }
     else
     {
+        ESP_LOGE(TAG, "Detools patch application failed! Error code: %d", patch_res);
         esp_ota_abort(state.ota_handle);
     }
 }
