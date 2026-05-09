@@ -79,7 +79,7 @@ void led_blink_task(void *pvParameter)
         gpio_set_level(LED_PIN_GREEN, 0);
         gpio_set_level(LED_PIN_BLUE, 0);
         send_led_telemetry(1, 0, 0);
-        vTaskDelay(pdMS_TO_TICKS(500));
+        vTaskDelay(pdMS_TO_TICKS(1000));
 
         // State 2: Green ON
         gpio_set_level(LED_PIN_RED, 0);
@@ -147,7 +147,8 @@ static int read_old_cb(void *arg_p, uint8_t *buf_p, size_t size)
 static int seek_old_cb(void *arg_p, int offset)
 {
     struct patch_state_t *state = (struct patch_state_t *)arg_p;
-    state->old_read_offset = offset;
+    // REVERTED: The detools sequential patching algorithm passes a relative forward offset
+    state->old_read_offset += offset;
     return 0;
 }
 
