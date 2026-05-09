@@ -79,7 +79,7 @@ void led_blink_task(void *pvParameter)
         gpio_set_level(LED_PIN_GREEN, 0);
         gpio_set_level(LED_PIN_BLUE, 0);
         send_led_telemetry(1, 0, 0);
-        vTaskDelay(pdMS_TO_TICKS(2000));
+        vTaskDelay(pdMS_TO_TICKS(1000));
 
         // State 2: Green ON
         gpio_set_level(LED_PIN_RED, 0);
@@ -248,33 +248,43 @@ void trigger_delta_ota_update(void)
     esp_err_t err = esp_http_client_open(api_client, 0);
     if (err != ESP_OK)
     {
+        ESP_LOGE(TAG, "Failed to open API HTTP client: %s", esp_err_to_name(err));
         esp_http_client_cleanup(api_client);
         return;
     }
 
     esp_http_client_fetch_headers(api_client);
     int status_code = esp_http_client_get_status_code(api_client);
-    int content_length = esp_http_client_get_content_length(api_client);
 
-    if (status_code != 200 || content_length <= 0)
+    if (status_code != 200)
     {
+        ESP_LOGE(TAG, "API check failed. HTTP %d", status_code);
         esp_http_client_cleanup(api_client);
         return;
     }
 
-    char *response_buffer = malloc(content_length + 1);
-    int read_len = esp_http_client_read(api_client, response_buffer, content_length);
-    response_buffer[read_len] = '\0';
+    // Use a fixed buffer to avoid dependency on missing Content-Length headers
+    char response_buffer[512] = {0};
+    int read_len = esp_http_client_read(api_client, response_buffer, sizeof(response_buffer) - 1);
     esp_http_client_cleanup(api_client);
 
-    cJSON *json = cJSON_Parse(response_buffer);
-    free(response_buffer);
-    if (json == NULL)
+    if (read_len <= 0)
+    {
+        ESP_LOGE(TAG, "Empty response from API Gateway.");
         return;
+    }
+
+    cJSON *json = cJSON_Parse(response_buffer);
+    if (json == NULL)
+    {
+        ESP_LOGE(TAG, "Failed to parse API JSON. Raw: %s", response_buffer);
+        return;
+    }
 
     cJSON *update_available = cJSON_GetObjectItem(json, "update_available");
     if (!update_available || !cJSON_IsTrue(update_available))
     {
+        ESP_LOGI(TAG, "Device is up to date. No update available.");
         cJSON_Delete(json);
         return;
     }
@@ -282,6 +292,7 @@ void trigger_delta_ota_update(void)
     cJSON *download_url = cJSON_GetObjectItem(json, "download_url");
     if (!download_url || !download_url->valuestring)
     {
+        ESP_LOGE(TAG, "Update available, but API omitted the download_url.");
         cJSON_Delete(json);
         return;
     }
@@ -306,6 +317,7 @@ void trigger_delta_ota_update(void)
     err = esp_http_client_open(state.http_client, 0);
     if (err != ESP_OK)
     {
+        ESP_LOGE(TAG, "Failed to open S3 HTTP client: %s", esp_err_to_name(err));
         esp_http_client_cleanup(state.http_client);
         return;
     }
@@ -317,7 +329,6 @@ void trigger_delta_ota_update(void)
     {
         ESP_LOGE(TAG, "S3 returned HTTP %d. Aborting.", s3_status);
 
-        // Read the XML error payload from AWS S3
         char err_buf[512] = {0};
         int error_read_len = esp_http_client_read(state.http_client, err_buf, sizeof(err_buf) - 1);
         if (error_read_len > 0)
@@ -334,6 +345,7 @@ void trigger_delta_ota_update(void)
     err = esp_ota_begin(state.new_partition, OTA_WITH_SEQUENTIAL_WRITES, &state.ota_handle);
     if (err != ESP_OK)
     {
+        ESP_LOGE(TAG, "esp_ota_begin failed: %s", esp_err_to_name(err));
         esp_http_client_cleanup(state.http_client);
         return;
     }
