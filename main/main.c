@@ -79,7 +79,7 @@ void led_blink_task(void *pvParameter)
         gpio_set_level(LED_PIN_GREEN, 0);
         gpio_set_level(LED_PIN_BLUE, 0);
         send_led_telemetry(1, 0, 0);
-        vTaskDelay(pdMS_TO_TICKS(500));
+        vTaskDelay(pdMS_TO_TICKS(1000));
 
         // State 2: Green ON
         gpio_set_level(LED_PIN_RED, 0);
@@ -263,12 +263,32 @@ void trigger_delta_ota_update(void)
         return;
     }
 
-    // Use a fixed buffer to avoid dependency on missing Content-Length headers
-    char response_buffer[512] = {0};
-    int read_len = esp_http_client_read(api_client, response_buffer, sizeof(response_buffer) - 1);
+    // Fully loop to gather all TCP segments of the JSON payload
+    char response_buffer[2048] = {0};
+    int total_read = 0;
+    while (1)
+    {
+        int read_len = esp_http_client_read(api_client, response_buffer + total_read, sizeof(response_buffer) - 1 - total_read);
+        if (read_len < 0)
+        {
+            ESP_LOGE(TAG, "Error reading from API");
+            break;
+        }
+        if (read_len == 0)
+        {
+            if (esp_http_client_is_complete_data_received(api_client))
+                break;
+            vTaskDelay(pdMS_TO_TICKS(10));
+            continue;
+        }
+        total_read += read_len;
+        if (total_read >= sizeof(response_buffer) - 1)
+            break; // Buffer is full
+    }
+
     esp_http_client_cleanup(api_client);
 
-    if (read_len <= 0)
+    if (total_read <= 0)
     {
         ESP_LOGE(TAG, "Empty response from API Gateway.");
         return;
