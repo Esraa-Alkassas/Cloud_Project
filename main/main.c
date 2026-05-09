@@ -76,16 +76,16 @@ void led_blink_task(void *pvParameter)
     {
         // State 1: Red/Green ON
         gpio_set_level(LED_PIN_RED, 1);
-        gpio_set_level(LED_PIN_GREEN, 1);
+        gpio_set_level(LED_PIN_GREEN, 0);
         gpio_set_level(LED_PIN_BLUE, 0);
-        send_led_telemetry(1, 1, 0);
+        send_led_telemetry(1, 0, 0);
         vTaskDelay(pdMS_TO_TICKS(1000));
 
         // State 2: Green ON
-        gpio_set_level(LED_PIN_RED, 1);
+        gpio_set_level(LED_PIN_RED, 0);
         gpio_set_level(LED_PIN_GREEN, 1);
         gpio_set_level(LED_PIN_BLUE, 0);
-        send_led_telemetry(1, 1, 0);
+        send_led_telemetry(0, 1, 0);
         vTaskDelay(pdMS_TO_TICKS(1000));
 
         // State 3: Blue ON
@@ -241,6 +241,7 @@ void trigger_delta_ota_update(void)
     esp_http_client_config_t api_config = {
         .url = api_url,
         .crt_bundle_attach = esp_crt_bundle_attach,
+        .buffer_size = 2048,
     };
 
     esp_http_client_handle_t api_client = esp_http_client_init(&api_config);
@@ -293,6 +294,8 @@ void trigger_delta_ota_update(void)
         .url = download_url->valuestring,
         .crt_bundle_attach = esp_crt_bundle_attach,
         .keep_alive_enable = true,
+        .buffer_size = 2048,
+        .buffer_size_tx = 2048,
     };
 
     state.http_client = esp_http_client_init(&s3_config);
