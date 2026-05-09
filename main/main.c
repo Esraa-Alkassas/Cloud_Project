@@ -76,9 +76,9 @@ void led_blink_task(void *pvParameter)
     {
         // State 1: Red/Green ON
         gpio_set_level(LED_PIN_RED, 1);
-        gpio_set_level(LED_PIN_GREEN, 1);
+        gpio_set_level(LED_PIN_GREEN, 0);
         gpio_set_level(LED_PIN_BLUE, 0);
-        send_led_telemetry(1, 1, 0);
+        send_led_telemetry(1, 0, 0);
         vTaskDelay(pdMS_TO_TICKS(1000));
 
         // State 2: Green ON
@@ -147,7 +147,6 @@ static int read_old_cb(void *arg_p, uint8_t *buf_p, size_t size)
 static int seek_old_cb(void *arg_p, int offset)
 {
     struct patch_state_t *state = (struct patch_state_t *)arg_p;
-    // FIXED: Seek is absolute from the beginning, not relative.
     state->old_read_offset = offset;
     return 0;
 }
@@ -287,6 +286,8 @@ void trigger_delta_ota_update(void)
         return;
     }
 
+    ESP_LOGI(TAG, "Extracted S3 Download URL: %s", download_url->valuestring);
+
     struct patch_state_t state = {0};
     state.old_partition = esp_ota_get_running_partition();
     state.new_partition = esp_ota_get_next_update_partition(NULL);
@@ -311,11 +312,19 @@ void trigger_delta_ota_update(void)
 
     esp_http_client_fetch_headers(state.http_client);
 
-    // Validate S3 HTTP Status before patching
     int s3_status = esp_http_client_get_status_code(state.http_client);
     if (s3_status != 200)
     {
         ESP_LOGE(TAG, "S3 returned HTTP %d. Aborting.", s3_status);
+
+        // Read the XML error payload from AWS S3
+        char err_buf[512] = {0};
+        int error_read_len = esp_http_client_read(state.http_client, err_buf, sizeof(err_buf) - 1);
+        if (error_read_len > 0)
+        {
+            ESP_LOGE(TAG, "S3 Error Body: %s", err_buf);
+        }
+
         esp_http_client_cleanup(state.http_client);
         return;
     }
@@ -354,7 +363,6 @@ void print_version_task(void *pvParameter)
     {
         ESP_LOGI(TAG, "Firmware: %s", app_desc->version);
 
-        // Publish version to ThingsBoard
         if (mqtt_client != NULL)
         {
             char payload[64];
@@ -363,6 +371,15 @@ void print_version_task(void *pvParameter)
         }
 
         vTaskDelay(pdMS_TO_TICKS(10000));
+    }
+}
+
+void ota_task(void *pvParameter)
+{
+    while (1)
+    {
+        trigger_delta_ota_update();
+        vTaskDelay(pdMS_TO_TICKS(60000));
     }
 }
 
@@ -389,13 +406,9 @@ void app_main(void)
 
     wifi_init_sta();
 
-    // Wait for WiFi, then start MQTT
     xEventGroupWaitBits(wifi_event_group, WIFI_CONNECTED_BIT, pdFALSE, pdTRUE, portMAX_DELAY);
     mqtt_app_start();
 
-    while (1)
-    {
-        trigger_delta_ota_update();
-        vTaskDelay(pdMS_TO_TICKS(60000));
-    }
+    // Start OTA task *after* network is connected
+    xTaskCreate(&ota_task, "ota_task", 8192, NULL, 5, NULL);
 }
