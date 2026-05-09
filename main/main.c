@@ -16,10 +16,15 @@
 #include "driver/gpio.h"
 #include "detools.h"
 #include "cJSON.h"
+#include "mqtt_client.h"
 
 static const char *TAG = "OTA_DELTA";
 
+// ==========================================
+// CONFIGURATION
+// ==========================================
 #define API_GATEWAY_URL "https://kavm965brg.execute-api.us-east-1.amazonaws.com/check"
+#define TB_MQTT_URL "mqtt://mqtt.eu.thingsboard.cloud"
 
 #define LED_PIN_RED GPIO_NUM_21
 #define LED_PIN_GREEN GPIO_NUM_23
@@ -27,6 +32,8 @@ static const char *TAG = "OTA_DELTA";
 
 static EventGroupHandle_t wifi_event_group;
 #define WIFI_CONNECTED_BIT BIT0
+
+esp_mqtt_client_handle_t mqtt_client = NULL;
 
 struct patch_state_t
 {
@@ -36,6 +43,22 @@ struct patch_state_t
     esp_http_client_handle_t http_client;
     int old_read_offset;
 };
+
+// ==========================================
+// TELEMETRY LOGIC
+// ==========================================
+void send_led_telemetry(int r, int g, int b)
+{
+    if (mqtt_client == NULL)
+        return;
+
+    char payload[128];
+    // ThingsBoard expects a JSON object for telemetry
+    snprintf(payload, sizeof(payload), "{\"red_led\":%d, \"green_led\":%d, \"blue_led\":%d}", r, g, b);
+
+    int msg_id = esp_mqtt_client_publish(mqtt_client, "v1/devices/me/telemetry", payload, 0, 1, 0);
+    ESP_LOGD(TAG, "Sent telemetry, msg_id=%d", msg_id);
+}
 
 // ==========================================
 // LED TASK LOGIC
@@ -51,21 +74,61 @@ void led_blink_task(void *pvParameter)
 
     while (1)
     {
+        // State 1: Red/Green ON
         gpio_set_level(LED_PIN_RED, 1);
+        gpio_set_level(LED_PIN_GREEN, 0);
+        gpio_set_level(LED_PIN_BLUE, 0);
+        send_led_telemetry(1, 1, 0);
+        vTaskDelay(pdMS_TO_TICKS(1000));
+
+        // State 2: Green ON
+        gpio_set_level(LED_PIN_RED, 0);
         gpio_set_level(LED_PIN_GREEN, 1);
         gpio_set_level(LED_PIN_BLUE, 0);
-        vTaskDelay(pdMS_TO_TICKS(500));
+        send_led_telemetry(0, 1, 0);
+        vTaskDelay(pdMS_TO_TICKS(1000));
 
-        gpio_set_level(LED_PIN_RED, 1);
-        gpio_set_level(LED_PIN_GREEN, 1);
-        gpio_set_level(LED_PIN_BLUE, 0);
-        vTaskDelay(pdMS_TO_TICKS(500));
-
+        // State 3: Blue ON
         gpio_set_level(LED_PIN_RED, 0);
         gpio_set_level(LED_PIN_GREEN, 0);
         gpio_set_level(LED_PIN_BLUE, 1);
-        vTaskDelay(pdMS_TO_TICKS(500));
+        send_led_telemetry(0, 0, 1);
+        vTaskDelay(pdMS_TO_TICKS(1000));
     }
+}
+
+// ==========================================
+// MQTT EVENT HANDLER
+// ==========================================
+static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_t event_id, void *event_data)
+{
+    esp_mqtt_event_handle_t event = event_data;
+    switch ((esp_mqtt_event_id_t)event_id)
+    {
+    case MQTT_EVENT_CONNECTED:
+        ESP_LOGI(TAG, "MQTT Connected to ThingsBoard");
+        break;
+    case MQTT_EVENT_DISCONNECTED:
+        ESP_LOGW(TAG, "MQTT Disconnected");
+        break;
+    case MQTT_EVENT_ERROR:
+        ESP_LOGE(TAG, "MQTT Error");
+        break;
+    default:
+        break;
+    }
+}
+
+static void mqtt_app_start(void)
+{
+    esp_mqtt_client_config_t mqtt_cfg = {
+        .broker.address.uri = TB_MQTT_URL,
+        .credentials.username = CONFIG_THINGSBOARD_MQTT_ACCESS_TOKEN,
+    };
+
+    mqtt_client = esp_mqtt_client_init(&mqtt_cfg);
+    esp_mqtt_client_register_event(mqtt_client, ESP_EVENT_ANY_ID, mqtt_event_handler, NULL);
+    esp_mqtt_client_start(mqtt_client);
 }
 
 // ==========================================
@@ -130,7 +193,7 @@ static void event_handler(void *arg, esp_event_base_t event_base, int32_t event_
     else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED)
     {
         xEventGroupClearBits(wifi_event_group, WIFI_CONNECTED_BIT);
-        ESP_LOGE(TAG, "Wi-Fi disconnected! Pausing OTA checks until reconnected...");
+        ESP_LOGE(TAG, "Wi-Fi disconnected!");
         esp_wifi_connect();
     }
     else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP)
@@ -151,26 +214,19 @@ static void wifi_init_sta(void)
     wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
     ESP_ERROR_CHECK(esp_wifi_init(&cfg));
 
-    esp_event_handler_instance_t instance_any_id;
-    esp_event_handler_instance_t instance_got_ip;
-    ESP_ERROR_CHECK(esp_event_handler_instance_register(WIFI_EVENT, ESP_EVENT_ANY_ID, &event_handler, NULL, &instance_any_id));
-    ESP_ERROR_CHECK(esp_event_handler_instance_register(IP_EVENT, IP_EVENT_STA_GOT_IP, &event_handler, NULL, &instance_got_ip));
+    ESP_ERROR_CHECK(esp_event_handler_instance_register(WIFI_EVENT, ESP_EVENT_ANY_ID, &event_handler, NULL, NULL));
+    ESP_ERROR_CHECK(esp_event_handler_instance_register(IP_EVENT, IP_EVENT_STA_GOT_IP, &event_handler, NULL, NULL));
 
     wifi_config_t wifi_config = {
         .sta = {
             .ssid = CONFIG_ESP_WIFI_SSID,
             .password = CONFIG_ESP_WIFI_PASSWORD,
-            .threshold.authmode = WIFI_AUTH_WPA2_PSK,
         },
     };
 
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_config));
     ESP_ERROR_CHECK(esp_wifi_start());
-
-    esp_wifi_set_ps(WIFI_PS_NONE);
-
-    ESP_LOGI(TAG, "Wi-Fi initialized. Waiting for connection...");
 }
 
 // ==========================================
@@ -178,12 +234,7 @@ static void wifi_init_sta(void)
 // ==========================================
 void trigger_delta_ota_update(void)
 {
-    ESP_LOGI(TAG, "Starting Delta OTA update sequence...");
-
     const esp_app_desc_t *app_desc = esp_app_get_description();
-
-    ESP_LOGI(TAG, "Checking for updates... Sending Hash: [%s]", app_desc->version);
-
     char api_url[512];
     snprintf(api_url, sizeof(api_url), "%s?hash=%s", API_GATEWAY_URL, app_desc->version);
 
@@ -196,7 +247,6 @@ void trigger_delta_ota_update(void)
     esp_err_t err = esp_http_client_open(api_client, 0);
     if (err != ESP_OK)
     {
-        ESP_LOGE(TAG, "Failed to open API Gateway: %s", esp_err_to_name(err));
         esp_http_client_cleanup(api_client);
         return;
     }
@@ -207,26 +257,6 @@ void trigger_delta_ota_update(void)
 
     if (status_code != 200 || content_length <= 0)
     {
-        ESP_LOGE(TAG, "Invalid API response. Status: %d", status_code);
-
-        ESP_LOGE(TAG, "Attempted URL: %s", api_url);
-
-        if (content_length > 0)
-        {
-            char *error_buffer = malloc(content_length + 1);
-            int read_len = esp_http_client_read(api_client, error_buffer, content_length);
-            if (read_len >= 0)
-            {
-                error_buffer[read_len] = '\0';
-                ESP_LOGE(TAG, "AWS Error Message: %s", error_buffer);
-            }
-            free(error_buffer);
-        }
-        else
-        {
-            ESP_LOGE(TAG, "AWS did not send an error body.");
-        }
-
         esp_http_client_cleanup(api_client);
         return;
     }
@@ -238,14 +268,12 @@ void trigger_delta_ota_update(void)
 
     cJSON *json = cJSON_Parse(response_buffer);
     free(response_buffer);
-
     if (json == NULL)
         return;
 
     cJSON *update_available = cJSON_GetObjectItem(json, "update_available");
     if (!update_available || !cJSON_IsTrue(update_available))
     {
-        ESP_LOGI(TAG, "Device is up to date. No patch required.");
         cJSON_Delete(json);
         return;
     }
@@ -257,8 +285,6 @@ void trigger_delta_ota_update(void)
         return;
     }
 
-    ESP_LOGI(TAG, "Update found! Proceeding with patch download...");
-
     struct patch_state_t state = {0};
     state.old_partition = esp_ota_get_running_partition();
     state.new_partition = esp_ota_get_next_update_partition(NULL);
@@ -267,9 +293,8 @@ void trigger_delta_ota_update(void)
         .url = download_url->valuestring,
         .crt_bundle_attach = esp_crt_bundle_attach,
         .keep_alive_enable = true,
-        .buffer_size = 4096,
-        .buffer_size_tx = 4096,
     };
+
     state.http_client = esp_http_client_init(&s3_config);
     cJSON_Delete(json);
 
@@ -290,28 +315,17 @@ void trigger_delta_ota_update(void)
         return;
     }
 
-    ESP_LOGI(TAG, "Applying Binary Patch...");
     int patch_res = detools_apply_patch_callbacks(read_old_cb, seek_old_cb, read_patch_cb, patch_size, write_new_cb, &state);
     esp_http_client_cleanup(state.http_client);
 
     if (patch_res >= 0)
     {
-        ESP_LOGI(TAG, "Patch Applied Successfully! Finalizing...");
-        err = esp_ota_end(state.ota_handle);
-        if (err == ESP_OK)
-        {
-            err = esp_ota_set_boot_partition(state.new_partition);
-            if (err == ESP_OK)
-            {
-                ESP_LOGI(TAG, "Rebooting in 2 seconds...");
-                vTaskDelay(pdMS_TO_TICKS(2000));
-                esp_restart();
-            }
-        }
+        esp_ota_end(state.ota_handle);
+        esp_ota_set_boot_partition(state.new_partition);
+        esp_restart();
     }
     else
     {
-        ESP_LOGE(TAG, "Detools patching failed: %d", patch_res);
         esp_ota_abort(state.ota_handle);
     }
 }
@@ -321,17 +335,24 @@ void print_version_task(void *pvParameter)
     const esp_app_desc_t *app_desc = esp_app_get_description();
     while (1)
     {
-        ESP_LOGW(TAG, "=== Running Firmware Version: %s ===", app_desc->version);
-        vTaskDelay(pdMS_TO_TICKS(5000));
+        ESP_LOGI(TAG, "Firmware: %s", app_desc->version);
+
+        // Publish version to ThingsBoard
+        if (mqtt_client != NULL)
+        {
+            char payload[64];
+            snprintf(payload, sizeof(payload), "{\"fw_version\":\"%s\"}", app_desc->version);
+            esp_mqtt_client_publish(mqtt_client, "v1/devices/me/telemetry", payload, 0, 1, 0);
+        }
+
+        vTaskDelay(pdMS_TO_TICKS(10000));
     }
 }
 
 void app_main(void)
 {
-    // Mute the noisy Wi-Fi state logs
     esp_log_level_set("wifi", ESP_LOG_ERROR);
 
-    volatile uint8_t dummy_counter = 0;
     esp_err_t ret = nvs_flash_init();
     if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND)
     {
@@ -344,26 +365,20 @@ void app_main(void)
     if (running_partition->subtype != ESP_PARTITION_SUBTYPE_APP_FACTORY)
     {
         esp_ota_mark_app_valid_cancel_rollback();
-        ESP_LOGI(TAG, "Application state marked as valid.");
-    }
-    else
-    {
-        ESP_LOGI(TAG, "Running from factory partition. Skipping OTA validation.");
     }
 
-    xTaskCreate(&print_version_task, "print_version_task", 2048, NULL, 5, NULL);
-    xTaskCreate(&led_blink_task, "led_blink_task", 2048, NULL, 5, NULL);
+    xTaskCreate(&print_version_task, "version_task", 2048, NULL, 5, NULL);
+    xTaskCreate(&led_blink_task, "led_task", 3072, NULL, 5, NULL);
 
     wifi_init_sta();
 
+    // Wait for WiFi, then start MQTT
+    xEventGroupWaitBits(wifi_event_group, WIFI_CONNECTED_BIT, pdFALSE, pdTRUE, portMAX_DELAY);
+    mqtt_app_start();
+
     while (1)
     {
-        xEventGroupWaitBits(wifi_event_group, WIFI_CONNECTED_BIT, pdFALSE, pdTRUE, portMAX_DELAY);
-
-        dummy_counter++;
         trigger_delta_ota_update();
-
-        // Wait 32 seconds before checking again
-        vTaskDelay(pdMS_TO_TICKS(32000));
+        vTaskDelay(pdMS_TO_TICKS(60000));
     }
 }

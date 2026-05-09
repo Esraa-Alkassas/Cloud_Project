@@ -14,4 +14,5 @@ idf_component_register(
         json               
         bootloader_support 
         driver
+        mqtt
 )
