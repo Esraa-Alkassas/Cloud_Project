@@ -147,8 +147,7 @@ static int read_old_cb(void *arg_p, uint8_t *buf_p, size_t size)
 static int seek_old_cb(void *arg_p, int offset)
 {
     struct patch_state_t *state = (struct patch_state_t *)arg_p;
-    // REVERTED: The detools sequential patching algorithm passes a relative forward offset
-    state->old_read_offset += offset;
+    state->old_read_offset = offset;
     return 0;
 }
 
@@ -156,18 +155,30 @@ static int read_patch_cb(void *arg_p, uint8_t *buf_p, size_t size)
 {
     struct patch_state_t *state = (struct patch_state_t *)arg_p;
     size_t total_read = 0;
+    int retry_count = 0; // FIX: Prevent infinite blocking on silent network drops
+
     while (total_read < size)
     {
         int read_len = esp_http_client_read(state->http_client, (char *)(buf_p + total_read), size - total_read);
         if (read_len < 0)
             return -1;
+
         if (read_len == 0)
         {
             if (esp_http_client_is_complete_data_received(state->http_client))
                 return -1;
+
+            retry_count++;
+            if (retry_count > 500) // ~5 seconds timeout (500 * 10ms)
+            {
+                ESP_LOGE(TAG, "Timeout waiting for S3 chunk");
+                return -1;
+            }
             vTaskDelay(pdMS_TO_TICKS(10));
             continue;
         }
+
+        retry_count = 0; // Reset counter on successful read
         total_read += read_len;
     }
     return 0;
@@ -179,6 +190,8 @@ static int write_new_cb(void *arg_p, const uint8_t *buf_p, size_t size)
     esp_err_t err = esp_ota_write(state->ota_handle, buf_p, size);
     if (err != ESP_OK)
         return -1;
+
+    vTaskDelay(pdMS_TO_TICKS(1));
     return 0;
 }
 
@@ -264,9 +277,10 @@ void trigger_delta_ota_update(void)
         return;
     }
 
-    // Fully loop to gather all TCP segments of the JSON payload
     char response_buffer[2048] = {0};
     int total_read = 0;
+    int api_retry_count = 0; // FIX: Timeout for API connection drops
+
     while (1)
     {
         int read_len = esp_http_client_read(api_client, response_buffer + total_read, sizeof(response_buffer) - 1 - total_read);
@@ -279,9 +293,18 @@ void trigger_delta_ota_update(void)
         {
             if (esp_http_client_is_complete_data_received(api_client))
                 break;
+
+            api_retry_count++;
+            if (api_retry_count > 500)
+            {
+                ESP_LOGE(TAG, "Timeout waiting for API response");
+                break;
+            }
             vTaskDelay(pdMS_TO_TICKS(10));
             continue;
         }
+
+        api_retry_count = 0;
         total_read += read_len;
         if (total_read >= sizeof(response_buffer) - 1)
             break; // Buffer is full
@@ -294,6 +317,9 @@ void trigger_delta_ota_update(void)
         ESP_LOGE(TAG, "Empty response from API Gateway.");
         return;
     }
+
+    // FIX: Ensure strict null-termination before parsing to avoid cJSON segfaults
+    response_buffer[total_read] = '\0';
 
     cJSON *json = cJSON_Parse(response_buffer);
     if (json == NULL)
@@ -377,10 +403,25 @@ void trigger_delta_ota_update(void)
 
     if (patch_res >= 0)
     {
-        ESP_LOGI(TAG, "Patch applied successfully. Rebooting...");
-        esp_ota_end(state.ota_handle);
-        esp_ota_set_boot_partition(state.new_partition);
-        esp_restart();
+        ESP_LOGI(TAG, "Patch applied successfully. Validating image...");
+        err = esp_ota_end(state.ota_handle);
+        if (err == ESP_OK)
+        {
+            err = esp_ota_set_boot_partition(state.new_partition);
+            if (err == ESP_OK)
+            {
+                ESP_LOGI(TAG, "OTA Success! Rebooting...");
+                esp_restart();
+            }
+            else
+            {
+                ESP_LOGE(TAG, "esp_ota_set_boot_partition failed! %s", esp_err_to_name(err));
+            }
+        }
+        else
+        {
+            ESP_LOGE(TAG, "esp_ota_end failed (likely corrupt image)! %s", esp_err_to_name(err));
+        }
     }
     else
     {
@@ -442,6 +483,6 @@ void app_main(void)
     xEventGroupWaitBits(wifi_event_group, WIFI_CONNECTED_BIT, pdFALSE, pdTRUE, portMAX_DELAY);
     mqtt_app_start();
 
-    // Start OTA task *after* network is connected
-    xTaskCreate(&ota_task, "ota_task", 8192, NULL, 5, NULL);
+    // FIX: Increased task stack from 8192 to 12288 to safely accommodate HTTPS mbedTLS overhead and stack variables
+    xTaskCreate(&ota_task, "ota_task", 12288, NULL, 5, NULL);
 }
