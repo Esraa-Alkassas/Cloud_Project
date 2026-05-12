@@ -21,11 +21,13 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: us-east-1
 
-      # 1. Inject the GitHub Run Number as the ESP32 Version
+      # 1. Inject Epoch + SHA as the ESP32 Version
       - name: Set Firmware Version
         id: set-version
         run: |
-          DEV_VERSION="${GITHUB_RUN_NUMBER}"
+          EPOCH=$(date +%s)
+          SHA=$(git rev-parse --short HEAD)
+          DEV_VERSION="${EPOCH}-${SHA}"
           echo "$DEV_VERSION" > version.txt
           echo "Building dev version: $DEV_VERSION"
           echo "dev_version=$DEV_VERSION" >> $GITHUB_OUTPUT
@@ -38,7 +40,7 @@ jobs:
           target: esp32
           path: '.'
 
-      # 3. Rename output to match the Run Number
+      # 3. Rename output to match the Version
       - name: Rename Build Output
         run: |
           DEV_VERSION="${{ steps.set-version.outputs.dev_version }}"
@@ -50,36 +52,79 @@ jobs:
         with:
           python-version: '3.10'
 
-      # 4. Generate Star Topology Delta Patches
-      - name: Generate Direct-Jump Patches
+      # 4. Generate Delta Patches and Maintain Manifest
+      - name: Generate Patches and Update Manifest
         run: |
           LATEST_VER="${{ steps.set-version.outputs.dev_version }}"
           NEW_FILE="build_${LATEST_VER}.bin"
+          BUCKET="esp32-firmware-rewaa"
           
           pip install detools
           
-          echo "Fetching previous baselines from S3 to generate delta patches..."
-          # List all previous builds, extract just the filenames
-          PREVIOUS_BUILDS=$(aws s3 ls s3://esp32-firmware-rewaa/ | grep 'build_[0-9]*\.bin$' | awk '{print $4}')
+          echo "Fetching manifest.json from S3..."
+          aws s3 cp s3://${BUCKET}/manifest.json manifest.json || echo '{"latest_version": "", "delta_patches": {}}' > manifest.json
           
-          if [ -z "$PREVIOUS_BUILDS" ]; then
-            echo "No previous builds found in bucket. This is the first upload."
-          else
-            for OLD_FILE in $PREVIOUS_BUILDS; do
-              aws s3 cp s3://esp32-firmware-rewaa/${OLD_FILE} ./${OLD_FILE}
-              
-              # Extract the old version integer (e.g., extracts "42" from "build_42.bin")
-              OLD_VER=$(echo $OLD_FILE | sed -E 's/build_([0-9]+)\.bin/\1/')
-              
-              PATCH_NAME="patch_${OLD_VER}_to_${LATEST_VER}.bin"
-              
-              echo "Generating delta: Run $OLD_VER -> Run $LATEST_VER"
-              detools create_patch -c crle ${OLD_FILE} ${NEW_FILE} ${PATCH_NAME}
-              
-              echo "Uploading $PATCH_NAME to S3..."
-              aws s3 cp ${PATCH_NAME} s3://esp32-firmware-rewaa/
-            done
-          fi
+          echo "Fetching previous baselines from S3..."
+          # List all previous builds
+          PREVIOUS_BUILDS=$(aws s3 ls s3://${BUCKET}/ | grep 'build_.*\.bin$' | awk '{print $4}')
           
-          echo "Uploading new baseline $NEW_FILE to S3..."
-          aws s3 cp ${NEW_FILE} s3://esp32-firmware-rewaa/
+          LATEST_VER="$LATEST_VER" \
+          NEW_FILE="$NEW_FILE" \
+          BUCKET="$BUCKET" \
+          PREVIOUS_BUILDS="$PREVIOUS_BUILDS" \
+          python3 - <<'EOF'
+import json
+import os
+import subprocess
+import sys
+
+# Get variables from environment
+latest_ver = os.environ.get('LATEST_VER')
+new_file = os.environ.get('NEW_FILE')
+bucket = os.environ.get('BUCKET')
+previous_builds = os.environ.get('PREVIOUS_BUILDS', '').split()
+
+with open('manifest.json', 'r') as f:
+    manifest = json.load(f)
+
+for old_file in previous_builds:
+    # Skip if it's the current build
+    if old_file == new_file:
+        continue
+    
+    # Extract old version from filename (build_VERSION.bin)
+    old_ver = old_file.replace('build_', '').replace('.bin', '')
+    patch_name = f"patch_{old_ver}_to_{latest_ver}.bin"
+    
+    print(f"Generating delta: {old_ver} -> {latest_ver}")
+    
+    # Download old file
+    try:
+        subprocess.run(["aws", "s3", "cp", f"s3://{bucket}/{old_file}", old_file], check=True)
+        # Create patch
+        subprocess.run(["detools", "create_patch", "-c", "crle", old_file, new_file, patch_name], check=True)
+        # Upload patch
+        subprocess.run(["aws", "s3", "cp", patch_name, f"s3://{bucket}/{patch_name}"], check=True)
+        # Update manifest
+        manifest['delta_patches'][old_ver] = patch_name
+    except Exception as e:
+        print(f"Failed to generate patch for {old_ver}: {e}")
+    finally:
+        if os.path.exists(old_file):
+            os.remove(old_file)
+        if os.path.exists(patch_name):
+            os.remove(patch_name)
+
+manifest['latest_version'] = latest_ver
+
+with open('manifest.json', 'w') as f:
+    json.dump(manifest, f, indent=4)
+EOF
+
+      - name: Final Uploads
+        run: |
+          LATEST_VER="${{ steps.set-version.outputs.dev_version }}"
+          NEW_FILE="build_${LATEST_VER}.bin"
+          BUCKET="esp32-firmware-rewaa"
+          aws s3 cp manifest.json s3://${BUCKET}/manifest.json
+          aws s3 cp ${NEW_FILE} s3://${BUCKET}/${NEW_FILE}
