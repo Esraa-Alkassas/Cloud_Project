@@ -207,20 +207,24 @@ static void wifi_init_sta(void)
     ESP_ERROR_CHECK(esp_event_handler_instance_register(WIFI_EVENT, ESP_EVENT_ANY_ID, &event_handler, NULL, NULL));
     ESP_ERROR_CHECK(esp_event_handler_instance_register(IP_EVENT, IP_EVENT_STA_GOT_IP, &event_handler, NULL, NULL));
 
+    // Force STA mode first
+    ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
     ESP_ERROR_CHECK(esp_wifi_set_storage(WIFI_STORAGE_FLASH));
+
     wifi_config_t current_conf;
     esp_wifi_get_config(WIFI_IF_STA, &current_conf);
 
     if (strlen((char *)current_conf.sta.ssid) == 0) {
-        ESP_LOGI(TAG, "No WiFi config in NVS. Provisioning from build defaults...");
+        ESP_LOGI(TAG, "NVS is empty. Saving build defaults...");
         wifi_config_t wifi_config = {
             .sta = { .ssid = CONFIG_ESP_WIFI_SSID, .password = CONFIG_ESP_WIFI_PASSWORD },
         };
-        ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
         ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_config));
     } else {
-        ESP_LOGI(TAG, "Using existing WiFi config from NVS: %s", (char *)current_conf.sta.ssid);
+        ESP_LOGI(TAG, "Loaded WiFi from Flash: %s", (char *)current_conf.sta.ssid);
     }
+
+    ESP_LOGI(TAG, "Starting Wi-Fi station...");
     ESP_ERROR_CHECK(esp_wifi_start());
 }
 
