@@ -217,19 +217,19 @@ void led_blink_task(void *pvParameter)
     while (1)
     {
         gpio_set_level(LED_PIN_RED, 1);
-        gpio_set_level(LED_PIN_GREEN, 1);
-        gpio_set_level(LED_PIN_BLUE, 1);
-        send_led_telemetry(1, 1, 1);
-        vTaskDelay(pdMS_TO_TICKS(500));
-        gpio_set_level(LED_PIN_RED, 0);
         gpio_set_level(LED_PIN_GREEN, 0);
         gpio_set_level(LED_PIN_BLUE, 0);
-        send_led_telemetry(0, 0, 0);
-        vTaskDelay(pdMS_TO_TICKS(1000));
-        gpio_set_level(LED_PIN_RED, 1);
+        send_led_telemetry(1, 0, 0);
+        vTaskDelay(pdMS_TO_TICKS(500));
+        gpio_set_level(LED_PIN_RED, 0);
         gpio_set_level(LED_PIN_GREEN, 1);
+        gpio_set_level(LED_PIN_BLUE, 0);
+        send_led_telemetry(0, 1, 0);
+        vTaskDelay(pdMS_TO_TICKS(1000));
+        gpio_set_level(LED_PIN_RED, 0);
+        gpio_set_level(LED_PIN_GREEN, 0);
         gpio_set_level(LED_PIN_BLUE, 1);
-        send_led_telemetry(1, 1, 1);
+        send_led_telemetry(0, 0, 1);
         vTaskDelay(pdMS_TO_TICKS(500));
     }
 }
@@ -334,7 +334,7 @@ static int write_new_cb(void *arg_p, const uint8_t *buf_p, size_t size)
 void trigger_delta_ota_update(void)
 {
     const esp_app_desc_t *app_desc = esp_app_get_description();
-    
+
     // Failure tracking for Full OTA fallback
     char fail_count_str[16] = "0";
     get_stored_value("ota_fail_cnt", fail_count_str, sizeof(fail_count_str));
@@ -342,7 +342,7 @@ void trigger_delta_ota_update(void)
 
     char url[640];
     snprintf(url, sizeof(url), "%s?hash=%s%s", API_GATEWAY_URL, app_desc->version, (fail_count > 0) ? "&force_full=1" : "");
-    
+
     ESP_LOGI(TAG, "Checking updates (Version: %s, Fails: %d)...", app_desc->version, fail_count);
 
     esp_http_client_config_t cfg = {
@@ -422,8 +422,7 @@ void trigger_delta_ota_update(void)
             .old_partition = esp_ota_get_running_partition(),
             .new_partition = esp_ota_get_next_update_partition(NULL),
             .last_pct = -1,
-            .patch_bytes_read = 0
-        };
+            .patch_bytes_read = 0};
 
         esp_http_client_config_t s3_cfg = {
             .url = dl_url,
