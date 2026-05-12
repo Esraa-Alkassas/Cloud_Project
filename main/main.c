@@ -185,6 +185,7 @@ struct patch_state_t
     esp_http_client_handle_t http_client;
     int old_read_offset;
     int total_bytes_written;
+    int patch_bytes_read; // NEW: track download progress
     int content_length;
     int last_pct;
 };
@@ -308,6 +309,17 @@ static int read_patch_cb(void *arg_p, uint8_t *buf_p, size_t size)
             return -1;
         total += r;
     }
+    // Progress based on DOWNLOAD bytes
+    state->patch_bytes_read += size;
+    if (state->content_length > 0)
+    {
+        int pct = (state->patch_bytes_read * 100) / state->content_length;
+        if (pct != state->last_pct && pct % 10 == 0)
+        {
+            ESP_LOGI(TAG, "Delta Patch Download: %d%%", pct);
+            state->last_pct = pct;
+        }
+    }
     return 0;
 }
 static int write_new_cb(void *arg_p, const uint8_t *buf_p, size_t size)
@@ -316,25 +328,22 @@ static int write_new_cb(void *arg_p, const uint8_t *buf_p, size_t size)
     if (esp_ota_write(state->ota_handle, buf_p, size) != ESP_OK)
         return -1;
     state->total_bytes_written += size;
-    if (state->content_length > 0)
-    {
-        int pct = (state->total_bytes_written * 100) / state->content_length;
-        if (pct != state->last_pct && pct % 10 == 0)
-        {
-            ESP_LOGI(TAG, "OTA Download: %d%%", pct);
-            state->last_pct = pct;
-        }
-    }
     return 0;
 }
 
 void trigger_delta_ota_update(void)
 {
     const esp_app_desc_t *app_desc = esp_app_get_description();
-    ESP_LOGI(TAG, "Current Version: %s. Checking for updates...", app_desc->version);
+    
+    // Failure tracking for Full OTA fallback
+    char fail_count_str[16] = "0";
+    get_stored_value("ota_fail_cnt", fail_count_str, sizeof(fail_count_str));
+    int fail_count = atoi(fail_count_str);
 
-    char url[512];
-    snprintf(url, sizeof(url), "%s?hash=%s", API_GATEWAY_URL, app_desc->version);
+    char url[640];
+    snprintf(url, sizeof(url), "%s?hash=%s%s", API_GATEWAY_URL, app_desc->version, (fail_count > 0) ? "&force_full=1" : "");
+    
+    ESP_LOGI(TAG, "Checking updates (Version: %s, Fails: %d)...", app_desc->version, fail_count);
 
     esp_http_client_config_t cfg = {
         .url = url,
@@ -412,7 +421,9 @@ void trigger_delta_ota_update(void)
         struct patch_state_t state = {
             .old_partition = esp_ota_get_running_partition(),
             .new_partition = esp_ota_get_next_update_partition(NULL),
-            .last_pct = -1};
+            .last_pct = -1,
+            .patch_bytes_read = 0
+        };
 
         esp_http_client_config_t s3_cfg = {
             .url = dl_url,
@@ -428,7 +439,7 @@ void trigger_delta_ota_update(void)
             state.content_length = esp_http_client_get_content_length(state.http_client);
 
             ESP_LOGI(TAG, "Download size: %d bytes, Partition size: %" PRIu32 " bytes", state.content_length, state.new_partition->size);
-            if (state.content_length > state.new_partition->size)
+            if (state.content_length > state.new_partition->size && !is_delta)
             {
                 ESP_LOGE(TAG, "Firmware too large for partition!");
                 esp_http_client_cleanup(state.http_client);
@@ -476,6 +487,8 @@ void trigger_delta_ota_update(void)
 
                 if (res >= 0 && esp_ota_end(state.ota_handle) == ESP_OK)
                 {
+                    // Success! Clear failure count
+                    store_value("ota_fail_cnt", "0");
                     esp_ota_set_boot_partition(state.new_partition);
                     ESP_LOGI(TAG, "OTA Success! Rebooting...");
                     vTaskDelay(pdMS_TO_TICKS(2000));
@@ -483,7 +496,10 @@ void trigger_delta_ota_update(void)
                 }
                 else
                 {
-                    ESP_LOGE(TAG, "OTA Apply Failed (%d)", res);
+                    ESP_LOGE(TAG, "OTA Apply Failed (%d). Marking failure in NVS.", res);
+                    char next_fail[16];
+                    snprintf(next_fail, sizeof(next_fail), "%d", fail_count + 1);
+                    store_value("ota_fail_cnt", next_fail);
                     esp_ota_abort(state.ota_handle);
                 }
             }
@@ -493,6 +509,7 @@ void trigger_delta_ota_update(void)
     else
     {
         ESP_LOGI(TAG, "Firmware is up-to-date.");
+        store_value("ota_fail_cnt", "0"); // Reset count if we are already current
     }
 
     cJSON_Delete(json);
