@@ -34,6 +34,30 @@ static EventGroupHandle_t wifi_event_group;
 esp_mqtt_client_handle_t mqtt_client = NULL;
 static int s_retry_num = 0;
 
+esp_err_t get_stored_value(const char *key, char *out_val, size_t max_len)
+{
+    nvs_handle_t handle;
+    esp_err_t err = nvs_open("provision", NVS_READONLY, &handle);
+    if (err != ESP_OK)
+        return err;
+    err = nvs_get_str(handle, key, out_val, &max_len);
+    nvs_close(handle);
+    return err;
+}
+
+esp_err_t store_value(const char *key, const char *val)
+{
+    nvs_handle_t handle;
+    esp_err_t err = nvs_open("provision", NVS_READWRITE, &handle);
+    if (err != ESP_OK)
+        return err;
+    err = nvs_set_str(handle, key, val);
+    if (err == ESP_OK)
+        nvs_commit(handle);
+    nvs_close(handle);
+    return err;
+}
+
 /* WiFi event handler */
 static void event_handler(void *arg, esp_event_base_t event_base,
                           int32_t event_id, void *event_data)
@@ -44,29 +68,35 @@ static void event_handler(void *arg, esp_event_base_t event_base,
     }
     else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED)
     {
+        wifi_event_sta_disconnected_t *event = (wifi_event_sta_disconnected_t *)event_data;
+        ESP_LOGW(TAG, "WiFi Disconnected (Reason: %d). Retry %d/%d", event->reason, s_retry_num, CONFIG_ESP_MAXIMUM_RETRY);
+
         if (s_retry_num < CONFIG_ESP_MAXIMUM_RETRY)
         {
             esp_wifi_connect();
             s_retry_num++;
-            ESP_LOGI(TAG, "retry to connect to the AP");
         }
         else
         {
-            if (wifi_event_group)
-            {
-                xEventGroupSetBits(wifi_event_group, WIFI_CONNECTED_BIT);
-            }
+            ESP_LOGE(TAG, "WiFi connection failed after max retries.");
         }
-        ESP_LOGI(TAG, "connect to the AP fail");
     }
     else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP)
     {
         ip_event_got_ip_t *event = (ip_event_got_ip_t *)event_data;
-        ESP_LOGI(TAG, "got ip:" IPSTR, IP2STR(&event->ip_info.ip));
+        ESP_LOGI(TAG, "Got IP:" IPSTR, IP2STR(&event->ip_info.ip));
         s_retry_num = 0;
         if (wifi_event_group)
         {
             xEventGroupSetBits(wifi_event_group, WIFI_CONNECTED_BIT);
+        }
+
+        // Persistence: Save working credentials to NVS
+        wifi_config_t conf;
+        if (esp_wifi_get_config(WIFI_IF_STA, &conf) == ESP_OK)
+        {
+            store_value("wifi_ssid", (char *)conf.sta.ssid);
+            store_value("wifi_pass", (char *)conf.sta.password);
         }
     }
 }
@@ -97,8 +127,6 @@ void wifi_init_sta(void)
 
     wifi_config_t wifi_config = {
         .sta = {
-            .ssid = CONFIG_ESP_WIFI_SSID,
-            .password = CONFIG_ESP_WIFI_PASSWORD,
 #if CONFIG_ESP_WIFI_AUTH_OPEN
             .threshold.authmode = WIFI_AUTH_OPEN,
 #elif CONFIG_ESP_WIFI_AUTH_WEP
@@ -125,6 +153,23 @@ void wifi_init_sta(void)
 #endif
         },
     };
+
+    // Try to load credentials from NVS, fallback to Kconfig
+    char nvs_ssid[32] = {0};
+    char nvs_pass[64] = {0};
+    if (get_stored_value("wifi_ssid", nvs_ssid, sizeof(nvs_ssid)) == ESP_OK &&
+        get_stored_value("wifi_pass", nvs_pass, sizeof(nvs_pass)) == ESP_OK)
+    {
+        ESP_LOGI(TAG, "Using WiFi credentials from NVS");
+        strncpy((char *)wifi_config.sta.ssid, nvs_ssid, sizeof(wifi_config.sta.ssid));
+        strncpy((char *)wifi_config.sta.password, nvs_pass, sizeof(wifi_config.sta.password));
+    }
+    else
+    {
+        ESP_LOGI(TAG, "Using WiFi credentials from Kconfig");
+        strncpy((char *)wifi_config.sta.ssid, CONFIG_ESP_WIFI_SSID, sizeof(wifi_config.sta.ssid));
+        strncpy((char *)wifi_config.sta.password, CONFIG_ESP_WIFI_PASSWORD, sizeof(wifi_config.sta.password));
+    }
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_config));
     ESP_ERROR_CHECK(esp_wifi_start());
@@ -147,29 +192,6 @@ struct patch_state_t
 // ==========================================
 // UTILS
 // ==========================================
-esp_err_t get_stored_value(const char *key, char *out_val, size_t max_len)
-{
-    nvs_handle_t handle;
-    esp_err_t err = nvs_open("provision", NVS_READONLY, &handle);
-    if (err != ESP_OK)
-        return err;
-    err = nvs_get_str(handle, key, out_val, &max_len);
-    nvs_close(handle);
-    return err;
-}
-
-esp_err_t store_value(const char *key, const char *val)
-{
-    nvs_handle_t handle;
-    esp_err_t err = nvs_open("provision", NVS_READWRITE, &handle);
-    if (err != ESP_OK)
-        return err;
-    err = nvs_set_str(handle, key, val);
-    if (err == ESP_OK)
-        nvs_commit(handle);
-    nvs_close(handle);
-    return err;
-}
 
 void send_led_telemetry(int r, int g, int b)
 {
