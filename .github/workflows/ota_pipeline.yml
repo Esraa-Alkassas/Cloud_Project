@@ -73,53 +73,53 @@ jobs:
           BUCKET="$BUCKET" \
           PREVIOUS_BUILDS="$PREVIOUS_BUILDS" \
           python3 - <<'EOF'
-import json
-import os
-import subprocess
-import sys
+          import json
+          import os
+          import subprocess
+          import sys
 
-# Get variables from environment
-latest_ver = os.environ.get('LATEST_VER')
-new_file = os.environ.get('NEW_FILE')
-bucket = os.environ.get('BUCKET')
-previous_builds = os.environ.get('PREVIOUS_BUILDS', '').split()
+          # Get variables from environment
+          latest_ver = os.environ.get('LATEST_VER')
+          new_file = os.environ.get('NEW_FILE')
+          bucket = os.environ.get('BUCKET')
+          previous_builds = os.environ.get('PREVIOUS_BUILDS', '').split()
 
-with open('manifest.json', 'r') as f:
-    manifest = json.load(f)
+          with open('manifest.json', 'r') as f:
+              manifest = json.load(f)
 
-for old_file in previous_builds:
-    # Skip if it's the current build
-    if old_file == new_file:
-        continue
-    
-    # Extract old version from filename (build_VERSION.bin)
-    old_ver = old_file.replace('build_', '').replace('.bin', '')
-    patch_name = f"patch_{old_ver}_to_{latest_ver}.bin"
-    
-    print(f"Generating delta: {old_ver} -> {latest_ver}")
-    
-    # Download old file
-    try:
-        subprocess.run(["aws", "s3", "cp", f"s3://{bucket}/{old_file}", old_file], check=True)
-        # Create patch
-        subprocess.run(["detools", "create_patch", "-c", "crle", old_file, new_file, patch_name], check=True)
-        # Upload patch
-        subprocess.run(["aws", "s3", "cp", patch_name, f"s3://{bucket}/{patch_name}"], check=True)
-        # Update manifest
-        manifest['delta_patches'][old_ver] = patch_name
-    except Exception as e:
-        print(f"Failed to generate patch for {old_ver}: {e}")
-    finally:
-        if os.path.exists(old_file):
-            os.remove(old_file)
-        if os.path.exists(patch_name):
-            os.remove(patch_name)
+          for old_file in previous_builds:
+              # Skip if it's the current build
+              if old_file == new_file:
+                  continue
+              
+              # Extract old version from filename (build_VERSION.bin)
+              old_ver = old_file.replace('build_', '').replace('.bin', '')
+              patch_name = f"patch_{old_ver}_to_{latest_ver}.bin"
+              
+              print(f"Generating delta: {old_ver} -> {latest_ver}")
+              
+              # Download old file
+              try:
+                  subprocess.run(["aws", "s3", "cp", f"s3://{bucket}/{old_file}", old_file], check=True)
+                  # Create patch
+                  subprocess.run(["detools", "create_patch", "-c", "crle", old_file, new_file, patch_name], check=True)
+                  # Upload patch
+                  subprocess.run(["aws", "s3", "cp", patch_name, f"s3://{bucket}/{patch_name}"], check=True)
+                  # Update manifest
+                  manifest['delta_patches'][old_ver] = patch_name
+              except Exception as e:
+                  print(f"Failed to generate patch for {old_ver}: {e}")
+              finally:
+                  if os.path.exists(old_file):
+                      os.remove(old_file)
+                  if os.path.exists(patch_name):
+                      os.remove(patch_name)
 
-manifest['latest_version'] = latest_ver
+          manifest['latest_version'] = latest_ver
 
-with open('manifest.json', 'w') as f:
-    json.dump(manifest, f, indent=4)
-EOF
+          with open('manifest.json', 'w') as f:
+              json.dump(manifest, f, indent=4)
+          EOF
 
       - name: Final Uploads
         run: |
