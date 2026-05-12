@@ -82,6 +82,18 @@ Once the container finishes building, open a terminal in VS Code (`Terminal` -> 
 4. Select **WiFi Password**, press `Enter`, type your password, and press `Enter`.
 5. Press `S` to Save, `Enter` to confirm, and `Q` to Quit.
 
+### Step 7: Enable Custom Partition Table
+We must tell the ESP32 how to divide its memory for OTA updates. By default, it only has one slot; we need to enable the custom "dual-slot" map.
+
+1. Open the configuration menu again:
+   ```bash
+   idf.py menuconfig
+   ```
+2. Navigate to **Partition Table** and press `Enter`.
+3. Highlight **Partition Table** (the first option), press `Enter`, select **Custom partition table CSV**, and press `Enter`.
+4. Ensure the **Custom partition table CSV file** says `partitions.csv`.
+5. Press `S` to Save, `Enter` to confirm, and `Q` to Quit.
+
 ***
 
 # ☀️ PART 2: Daily Developer Workflow
