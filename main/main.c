@@ -81,7 +81,7 @@ void led_blink_task(void *pvParameter)
         gpio_set_level(LED_PIN_GREEN, 0);
         gpio_set_level(LED_PIN_BLUE, 0);
         send_led_telemetry(1, 0, 0);
-        vTaskDelay(pdMS_TO_TICKS(1000));
+        vTaskDelay(pdMS_TO_TICKS(500));
 
         gpio_set_level(LED_PIN_RED, 0);
         gpio_set_level(LED_PIN_GREEN, 1);
@@ -302,15 +302,18 @@ void trigger_delta_ota_update(void)
         int read_len = esp_http_client_read(api_client, response_buffer + total_read, sizeof(response_buffer) - 1 - total_read);
         if (read_len <= 0)
         {
-            if (read_len == 0 && esp_http_client_is_complete_data_received(api_client)) break;
-            if (read_len < 0) ESP_LOGE(TAG, "Error reading API response");
+            if (read_len == 0 && esp_http_client_is_complete_data_received(api_client))
+                break;
+            if (read_len < 0)
+                ESP_LOGE(TAG, "Error reading API response");
             break;
         }
         total_read += read_len;
     }
     esp_http_client_cleanup(api_client);
 
-    if (total_read <= 0) return;
+    if (total_read <= 0)
+        return;
     response_buffer[total_read] = '\0';
 
     cJSON *json = cJSON_Parse(response_buffer);
@@ -401,7 +404,8 @@ void trigger_delta_ota_update(void)
                 int r = esp_http_client_read(state.http_client, buf, 2048);
                 if (r <= 0)
                 {
-                    if (r == 0 && esp_http_client_is_complete_data_received(state.http_client)) break;
+                    if (r == 0 && esp_http_client_is_complete_data_received(state.http_client))
+                        break;
                     update_res = -1;
                     break;
                 }
@@ -484,7 +488,7 @@ void app_main(void)
 
     wifi_init_sta();
     xEventGroupWaitBits(wifi_event_group, WIFI_CONNECTED_BIT, pdFALSE, pdTRUE, portMAX_DELAY);
-    
+
     mqtt_app_start();
     xTaskCreate(&ota_task, "ota_task", 12288, NULL, 5, NULL);
 }
