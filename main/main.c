@@ -188,12 +188,21 @@ static int write_new_cb(void *arg_p, const uint8_t *buf_p, size_t size) {
 // ==========================================
 static void event_handler(void *arg, esp_event_base_t event_base, int32_t event_id, void *event_data)
 {
-    if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_START) esp_wifi_connect();
-    else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
-        xEventGroupClearBits(wifi_event_group, WIFI_CONNECTED_BIT);
-        esp_wifi_connect();
+    if (event_base == WIFI_EVENT) {
+        if (event_id == WIFI_EVENT_STA_START) {
+            ESP_LOGI(TAG, "WiFi Manager: Started. Connecting to AP...");
+            esp_wifi_connect();
+        } else if (event_id == WIFI_EVENT_STA_DISCONNECTED) {
+            xEventGroupClearBits(wifi_event_group, WIFI_CONNECTED_BIT);
+            ESP_LOGW(TAG, "WiFi Manager: Disconnected. Retrying in 2s...");
+            vTaskDelay(pdMS_TO_TICKS(2000));
+            esp_wifi_connect();
+        }
+    } else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
+        ip_event_got_ip_t *event = (ip_event_got_ip_t *)event_data;
+        ESP_LOGI(TAG, "WiFi Manager: Got IP " IPSTR, IP2STR(&event->ip_info.ip));
+        xEventGroupSetBits(wifi_event_group, WIFI_CONNECTED_BIT);
     }
-    else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) xEventGroupSetBits(wifi_event_group, WIFI_CONNECTED_BIT);
 }
 
 static void wifi_init_sta(void)
@@ -207,24 +216,24 @@ static void wifi_init_sta(void)
     ESP_ERROR_CHECK(esp_event_handler_instance_register(WIFI_EVENT, ESP_EVENT_ANY_ID, &event_handler, NULL, NULL));
     ESP_ERROR_CHECK(esp_event_handler_instance_register(IP_EVENT, IP_EVENT_STA_GOT_IP, &event_handler, NULL, NULL));
 
-    // Force STA mode first
-    ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
+    // Standard sequence for Flash Storage
     ESP_ERROR_CHECK(esp_wifi_set_storage(WIFI_STORAGE_FLASH));
+    ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
 
     wifi_config_t current_conf;
     esp_wifi_get_config(WIFI_IF_STA, &current_conf);
 
     if (strlen((char *)current_conf.sta.ssid) == 0) {
-        ESP_LOGI(TAG, "NVS is empty. Saving build defaults...");
+        ESP_LOGI(TAG, "WiFi Manager: Storage empty. Provisioning defaults...");
         wifi_config_t wifi_config = {
             .sta = { .ssid = CONFIG_ESP_WIFI_SSID, .password = CONFIG_ESP_WIFI_PASSWORD },
         };
         ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_config));
     } else {
-        ESP_LOGI(TAG, "Loaded WiFi from Flash: %s", (char *)current_conf.sta.ssid);
+        ESP_LOGI(TAG, "WiFi Manager: Using stored credentials for SSID: %s", (char *)current_conf.sta.ssid);
     }
 
-    ESP_LOGI(TAG, "Starting Wi-Fi station...");
+    ESP_LOGI(TAG, "WiFi Manager: Triggering radio start...");
     ESP_ERROR_CHECK(esp_wifi_start());
 }
 
@@ -294,7 +303,7 @@ void trigger_delta_ota_update(void)
 
 void ota_task(void *pvParameter) {
     vTaskDelay(pdMS_TO_TICKS(5000));
-    while (1) { trigger_delta_ota_update(); vTaskDelay(pdMS_TO_TICKS(60000)); }
+    while (1) { trigger_delta_ota_update(); vTaskDelay(pdMS_TO_TICKS(31000)); }
 }
 
 void app_main(void)
@@ -312,7 +321,12 @@ void app_main(void)
 
     xTaskCreate(&led_blink_task, "led_task", 3072, NULL, 5, NULL);
     wifi_init_sta();
-    xEventGroupWaitBits(wifi_event_group, WIFI_CONNECTED_BIT, pdFALSE, pdTRUE, portMAX_DELAY);
+    
+    // Wait for connection with a 10s timeout log
+    if (xEventGroupWaitBits(wifi_event_group, WIFI_CONNECTED_BIT, pdFALSE, pdTRUE, pdMS_TO_TICKS(15000)) == 0) {
+        ESP_LOGE(TAG, "WiFi Manager: Still waiting for IP... checking environment.");
+    }
+
     mqtt_app_start();
     xTaskCreate(&ota_task, "ota_task", 12288, NULL, 5, NULL);
 }
