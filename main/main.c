@@ -218,7 +218,7 @@ void led_blink_task(void *pvParameter)
         gpio_set_level(LED_PIN_RED, 1);
         gpio_set_level(LED_PIN_GREEN, 0);
         gpio_set_level(LED_PIN_BLUE, 0);
-        send_led_telemetry(1, 1, 0);
+        send_led_telemetry(1, 0, 0);
         vTaskDelay(pdMS_TO_TICKS(500));
         gpio_set_level(LED_PIN_RED, 0);
         gpio_set_level(LED_PIN_GREEN, 1);
