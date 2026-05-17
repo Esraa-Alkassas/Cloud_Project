@@ -5,7 +5,8 @@ if(NOT CMAKE_BUILD_EARLY_EXPANSION)
     FetchContent_Declare(
         detools_src
         GIT_REPOSITORY https://github.com/eerimoq/detools.git
-        GIT_TAG        master 
+        GIT_TAG        master
+        GIT_SUBMODULES ""
     )
     FetchContent_MakeAvailable(detools_src)
 

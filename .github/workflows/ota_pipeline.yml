@@ -59,7 +59,7 @@ jobs:
           NEW_FILE="build_${LATEST_VER}.bin"
           BUCKET="esp32-firmware-rewaa"
           
-          pip install detools
+          pip install detools cryptography
           
           echo "Fetching manifest.json from S3..."
           aws s3 cp s3://${BUCKET}/manifest.json manifest.json || echo '{"latest_version": "", "delta_patches": {}}' > manifest.json
@@ -77,6 +77,20 @@ jobs:
           import os
           import subprocess
           import sys
+          from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+          from cryptography.hazmat.backends import default_backend
+
+          # Keys must match ESP32 firmware
+          AES_KEY = b'1234567890123456'
+          AES_IV = b'abcdefghijklmnop'
+
+          def process_file(filepath, is_encrypt):
+              cipher = Cipher(algorithms.AES(AES_KEY), modes.CTR(AES_IV), backend=default_backend())
+              processor = cipher.encryptor() if is_encrypt else cipher.decryptor()
+              with open(filepath, 'rb') as f:
+                  data = f.read()
+              with open(filepath, 'wb') as f:
+                  f.write(processor.update(data) + processor.finalize())
 
           # Get variables from environment
           latest_ver = os.environ.get('LATEST_VER')
@@ -101,8 +115,12 @@ jobs:
               # Download old file
               try:
                   subprocess.run(["aws", "s3", "cp", f"s3://{bucket}/{old_file}", old_file], check=True)
+                  # Decrypt the old S3 file so detools can compare raw unencrypted binaries
+                  process_file(old_file, is_encrypt=False)
                   # Create patch
                   subprocess.run(["detools", "create_patch", "-c", "crle", old_file, new_file, patch_name], check=True)
+                  # Encrypt the generated delta patch
+                  process_file(patch_name, is_encrypt=True)
                   # Upload patch
                   subprocess.run(["aws", "s3", "cp", patch_name, f"s3://{bucket}/{patch_name}"], check=True)
                   # Update manifest
@@ -116,6 +134,9 @@ jobs:
                       os.remove(patch_name)
 
           manifest['latest_version'] = latest_ver
+
+          # Encrypt the new full binary for fallback OTA and future delta diffs
+          process_file(new_file, is_encrypt=True)
 
           with open('manifest.json', 'w') as f:
               json.dump(manifest, f, indent=4)
