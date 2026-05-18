@@ -12,6 +12,7 @@ def lambda_handler(event, context):
     # Handle missing query params safely
     query_params = event.get('queryStringParameters') or {}
     current_version = query_params.get('hash', 'unknown')
+    force_full = query_params.get('force_full', '0') == '1'
     
     print(f"Request Version: {current_version}")
     
@@ -39,7 +40,7 @@ def lambda_handler(event, context):
     is_delta = False
     update_file = f"build_{latest_version}.bin"
 
-    if current_version in delta_patches:
+    if current_version in delta_patches and not force_full:
         is_delta = True
         update_file = delta_patches[current_version]
         print(f"Found delta patch: {update_file}")

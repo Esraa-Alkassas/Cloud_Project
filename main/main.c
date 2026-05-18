@@ -19,6 +19,7 @@
 #include "driver/gpio.h"
 #include "detools.h"
 #include "cJSON.h"
+#include "mbedtls/aes.h"
 #include "mqtt_client.h"
 
 static const char *TAG = "OTA_DELTA";
@@ -188,6 +189,10 @@ struct patch_state_t
     int patch_bytes_read; // NEW: track download progress
     int content_length;
     int last_pct;
+    mbedtls_aes_context aes_ctx;
+    size_t nc_off;
+    unsigned char nonce_counter[16];
+    unsigned char stream_block[16];
 };
 
 // ==========================================
@@ -218,18 +223,18 @@ void led_blink_task(void *pvParameter)
     {
         gpio_set_level(LED_PIN_RED, 1);
         gpio_set_level(LED_PIN_GREEN, 1);
+        gpio_set_level(LED_PIN_BLUE, 1);
+        send_led_telemetry(1, 1, 1);
+        vTaskDelay(pdMS_TO_TICKS(500));
+        gpio_set_level(LED_PIN_RED, 0);
+        gpio_set_level(LED_PIN_GREEN, 0);
         gpio_set_level(LED_PIN_BLUE, 0);
-        send_led_telemetry(1, 0, 0);
+        send_led_telemetry(0, 0, 0);
         vTaskDelay(pdMS_TO_TICKS(1000));
         gpio_set_level(LED_PIN_RED, 1);
         gpio_set_level(LED_PIN_GREEN, 1);
         gpio_set_level(LED_PIN_BLUE, 1);
-        send_led_telemetry(0, 1, 0);
-        vTaskDelay(pdMS_TO_TICKS(1000));
-        gpio_set_level(LED_PIN_RED, 0);
-        gpio_set_level(LED_PIN_GREEN, 0);
-        gpio_set_level(LED_PIN_BLUE, 1);
-        send_led_telemetry(0, 0, 1);
+        send_led_telemetry(1, 1, 1);
         vTaskDelay(pdMS_TO_TICKS(500));
     }
 }
@@ -309,6 +314,10 @@ static int read_patch_cb(void *arg_p, uint8_t *buf_p, size_t size)
             return -1;
         total += r;
     }
+
+    // Decrypt the payload on-the-fly
+    mbedtls_aes_crypt_ctr(&state->aes_ctx, size, &state->nc_off, state->nonce_counter, state->stream_block, buf_p, buf_p);
+
     // Progress based on DOWNLOAD bytes
     state->patch_bytes_read += size;
     if (state->content_length > 0)
@@ -424,6 +433,14 @@ void trigger_delta_ota_update(void)
             .last_pct = -1,
             .patch_bytes_read = 0};
 
+        // Initialize AES-CTR for decryption (Using hardcoded PSK for PoC)
+        unsigned char key[16] = "1234567890123456"; // 128-bit PSK
+        unsigned char iv[16] = "abcdefghijklmnop";  // 128-bit IV
+        mbedtls_aes_init(&state.aes_ctx);
+        mbedtls_aes_setkey_enc(&state.aes_ctx, key, 128);
+        memcpy(state.nonce_counter, iv, 16);
+        state.nc_off = 0;
+
         esp_http_client_config_t s3_cfg = {
             .url = dl_url,
             .crt_bundle_attach = esp_crt_bundle_attach,
@@ -475,6 +492,10 @@ void trigger_delta_ota_update(void)
                         }
                         if (r == 0)
                             break;
+
+                        // Decrypt chunk before writing (for full OTA fallback)
+                        mbedtls_aes_crypt_ctr(&state.aes_ctx, r, &state.nc_off, state.nonce_counter, state.stream_block, (unsigned char *)buf, (unsigned char *)buf);
+
                         if (write_new_cb(&state, (uint8_t *)buf, r) != 0)
                         {
                             res = -1;
@@ -504,6 +525,7 @@ void trigger_delta_ota_update(void)
             }
         }
         esp_http_client_cleanup(state.http_client);
+        mbedtls_aes_free(&state.aes_ctx);
     }
     else
     {
