@@ -1,0 +1,51 @@
+<div class="ota-dashboard">
+    <!-- Header Section -->
+    <div class="header">
+        <div class="title">DELTA OTA CONTROL CENTER</div>
+        <div class="version-tag">ACTIVE: <span id="fw-version">v0.0.0</span></div>
+    </div>
+
+    <!-- Status Cards Section -->
+    <div class="stats-grid">
+        <div class="stat-card">
+            <div class="stat-label">STRATEGY</div>
+            <div class="stat-value" id="ota-strategy">N/A</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-label">PATCH SIZE</div>
+            <div class="stat-value" id="ota-size">0 KB</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-label">FLASH TIME</div>
+            <div class="stat-value" id="flash-time">0 ms</div>
+        </div>
+    </div>
+
+    <!-- LED Status Section -->
+    <div class="led-container">
+        <div class="led-card">
+            <div id="led-red" class="led-bulb"></div>
+            <div class="led-label">RED</div>
+        </div>
+        <div class="led-card">
+            <div id="led-green" class="led-bulb"></div>
+            <div class="led-label">GREEN</div>
+        </div>
+        <div class="led-card">
+            <div id="led-blue" class="led-bulb"></div>
+            <div class="led-label">BLUE</div>
+        </div>
+    </div>
+
+    <!-- Main Control Section -->
+    <div class="main-action">
+        <div class="status-banner" id="status-banner">CHECKING SYSTEM STATUS...</div>
+        <button id="deploy-btn" class="deploy-btn" disabled>DEPLOY FIRMWARE UPDATE</button>
+    </div>
+
+    <!-- Log Section -->
+    <div class="log-container">
+        <div class="log-header">SYSTEM LOGS (REAL-TIME)</div>
+        <div id="log-window" class="log-window"></div>
+    </div>
+</div>

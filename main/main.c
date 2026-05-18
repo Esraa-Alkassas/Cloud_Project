@@ -35,6 +35,14 @@ static EventGroupHandle_t wifi_event_group;
 esp_mqtt_client_handle_t mqtt_client = NULL;
 static int s_retry_num = 0;
 
+// OTA Global State
+static bool s_update_available = false;
+static bool s_ota_trigger_received = false;
+static char s_pending_dl_url[1024] = {0};
+static bool s_pending_is_delta = false;
+static int s_pending_size = 0;
+static char s_latest_ver_str[64] = {0};
+
 esp_err_t get_stored_value(const char *key, char *out_val, size_t max_len)
 {
     nvs_handle_t handle;
@@ -199,6 +207,16 @@ struct patch_state_t
 // UTILS
 // ==========================================
 
+void send_tb_log(const char *msg)
+{
+    if (mqtt_client == NULL)
+        return;
+    char payload[256];
+    snprintf(payload, sizeof(payload), "{\"tb_log\":\"%s\"}", msg);
+    esp_mqtt_client_publish(mqtt_client, "v1/devices/me/telemetry", payload, 0, 1, 0);
+    ESP_LOGI("TB_LOG", "%s", msg);
+}
+
 void send_led_telemetry(int r, int g, int b)
 {
     if (mqtt_client == NULL)
@@ -247,8 +265,12 @@ void version_print_task(void *pv)
         ESP_LOGI(TAG, "Active Version: %s", app_desc->version);
         if (mqtt_client)
         {
-            char p[64];
-            snprintf(p, sizeof(p), "{\"fw_version\":\"%s\"}", app_desc->version);
+            char p[256];
+            snprintf(p, sizeof(p), "{\"fw_version\":\"%s\",\"update_available\":%s,\"strategy\":\"%s\",\"size\":%d}", 
+                     app_desc->version, 
+                     s_update_available ? "true" : "false",
+                     s_update_available ? (s_pending_is_delta ? "Delta" : "Full") : "N/A",
+                     s_pending_size);
             esp_mqtt_client_publish(mqtt_client, "v1/devices/me/telemetry", p, 0, 1, 0);
         }
         vTaskDelay(pdMS_TO_TICKS(30000));
@@ -260,13 +282,40 @@ void version_print_task(void *pv)
 // ==========================================
 static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_t event_id, void *event_data)
 {
+    esp_mqtt_event_handle_t event = event_data;
     switch ((esp_mqtt_event_id_t)event_id)
     {
     case MQTT_EVENT_CONNECTED:
         ESP_LOGI(TAG, "MQTT Connected to ThingsBoard");
+        esp_mqtt_client_subscribe(mqtt_client, "v1/devices/me/rpc/request/+", 1);
+        send_tb_log("Connected to ThingsBoard MQTT Broker");
         break;
     case MQTT_EVENT_DISCONNECTED:
         ESP_LOGW(TAG, "MQTT Disconnected");
+        break;
+    case MQTT_EVENT_DATA:
+        ESP_LOGI(TAG, "MQTT DATA Received. Topic: %.*s", event->topic_len, event->topic);
+        if (strncmp(event->topic, "v1/devices/me/rpc/request/", 26) == 0)
+        {
+            cJSON *root = cJSON_ParseWithLength(event->data, event->data_len);
+            if (root)
+            {
+                cJSON *method = cJSON_GetObjectItem(root, "method");
+                if (method && strcmp(method->valuestring, "start_ota") == 0)
+                {
+                    if (s_update_available)
+                    {
+                        send_tb_log("RPC Received: Starting OTA update...");
+                        s_ota_trigger_received = true;
+                    }
+                    else
+                    {
+                        send_tb_log("RPC Received: No update available to start.");
+                    }
+                }
+                cJSON_Delete(root);
+            }
+        }
         break;
     default:
         break;
@@ -325,7 +374,9 @@ static int read_patch_cb(void *arg_p, uint8_t *buf_p, size_t size)
         int pct = (state->patch_bytes_read * 100) / state->content_length;
         if (pct != state->last_pct && pct % 10 == 0)
         {
-            ESP_LOGI(TAG, "Delta Patch Download: %d%%", pct);
+            char log_msg[64];
+            snprintf(log_msg, sizeof(log_msg), "Download Progress: %d%%", pct);
+            send_tb_log(log_msg);
             state->last_pct = pct;
         }
     }
@@ -344,6 +395,12 @@ void trigger_delta_ota_update(void)
 {
     const esp_app_desc_t *app_desc = esp_app_get_description();
 
+    // Reset update state if not triggered
+    if (!s_ota_trigger_received) {
+        s_update_available = false;
+        s_pending_size = 0;
+    }
+
     // Failure tracking for Full OTA fallback
     char fail_count_str[16] = "0";
     get_stored_value("ota_fail_cnt", fail_count_str, sizeof(fail_count_str));
@@ -358,7 +415,7 @@ void trigger_delta_ota_update(void)
         .url = url,
         .crt_bundle_attach = esp_crt_bundle_attach,
         .timeout_ms = 15000,
-        .buffer_size = 10240, // Expanded to 10KB for large AWS headers
+        .buffer_size = 10240, 
         .buffer_size_tx = 4096};
     esp_http_client_handle_t client = esp_http_client_init(&cfg);
     esp_http_client_set_header(client, "Accept", "application/json");
@@ -401,7 +458,6 @@ void trigger_delta_ota_update(void)
         free(res_buf);
         return;
     }
-    ESP_LOGD(TAG, "Broker Response: %s", res_buf);
 
     cJSON *json = cJSON_Parse(res_buf);
     free(res_buf);
@@ -415,6 +471,7 @@ void trigger_delta_ota_update(void)
     {
         cJSON *url_item = cJSON_GetObjectItem(json, "download_url");
         cJSON *is_delta_item = cJSON_GetObjectItem(json, "is_delta");
+        cJSON *latest_ver_item = cJSON_GetObjectItem(json, "latest_version");
 
         if (!url_item || !url_item->valuestring)
         {
@@ -423,28 +480,65 @@ void trigger_delta_ota_update(void)
             return;
         }
 
-        char *dl_url = url_item->valuestring;
-        bool is_delta = cJSON_IsTrue(is_delta_item);
-        ESP_LOGI(TAG, "Update Found! Strategy: %s", is_delta ? "Delta" : "Full");
+        s_update_available = true;
+        s_pending_is_delta = cJSON_IsTrue(is_delta_item);
+        strncpy(s_pending_dl_url, url_item->valuestring, sizeof(s_pending_dl_url) - 1);
+        if (latest_ver_item && latest_ver_item->valuestring) {
+            strncpy(s_latest_ver_str, latest_ver_item->valuestring, sizeof(s_latest_ver_str) - 1);
+        }
+
+        // Phase 1: Get File Size (Headers Only)
+        esp_http_client_config_t size_cfg = {
+            .url = s_pending_dl_url,
+            .crt_bundle_attach = esp_crt_bundle_attach,
+            .timeout_ms = 15000};
+        esp_http_client_handle_t size_client = esp_http_client_init(&size_cfg);
+        if (esp_http_client_open(size_client, 0) == ESP_OK) {
+            esp_http_client_fetch_headers(size_client);
+            s_pending_size = esp_http_client_get_content_length(size_client);
+            esp_http_client_close(size_client);
+        }
+        esp_http_client_cleanup(size_client);
+
+        char log_buf[256];
+        snprintf(log_buf, sizeof(log_buf), "Update Pending: %s (%d bytes). Strategy: %s. Awaiting User Deployment...", 
+                 s_latest_ver_str, s_pending_size, s_pending_is_delta ? "Delta" : "Full");
+        send_tb_log(log_buf);
+
+        // Update ThingsBoard immediately with new pending status
+        char p[256];
+        snprintf(p, sizeof(p), "{\"update_available\":true,\"strategy\":\"%s\",\"size\":%d,\"latest_ver\":\"%s\"}", 
+                 s_pending_is_delta ? "Delta" : "Full", s_pending_size, s_latest_ver_str);
+        esp_mqtt_client_publish(mqtt_client, "v1/devices/me/telemetry", p, 0, 1, 0);
+
+        // Phase 2: Wait for RPC trigger
+        while (!s_ota_trigger_received) {
+            vTaskDelay(pdMS_TO_TICKS(1000));
+        }
+
+        // Start Timing
+        uint32_t start_time = xTaskGetTickCount();
+        send_tb_log("Deploying SW update now...");
 
         struct patch_state_t state = {
             .old_partition = esp_ota_get_running_partition(),
             .new_partition = esp_ota_get_next_update_partition(NULL),
             .last_pct = -1,
-            .patch_bytes_read = 0};
+            .patch_bytes_read = 0,
+            .content_length = s_pending_size};
 
-        // Initialize AES-CTR for decryption (Using hardcoded PSK for PoC)
-        unsigned char key[16] = "1234567890123456"; // 128-bit PSK
-        unsigned char iv[16] = "abcdefghijklmnop";  // 128-bit IV
+        // Initialize AES-CTR
+        unsigned char key[16] = "1234567890123456"; 
+        unsigned char iv[16] = "abcdefghijklmnop";  
         mbedtls_aes_init(&state.aes_ctx);
         mbedtls_aes_setkey_enc(&state.aes_ctx, key, 128);
         memcpy(state.nonce_counter, iv, 16);
         state.nc_off = 0;
 
         esp_http_client_config_t s3_cfg = {
-            .url = dl_url,
+            .url = s_pending_dl_url,
             .crt_bundle_attach = esp_crt_bundle_attach,
-            .buffer_size = 10240, // 10KB for S3
+            .buffer_size = 10240, 
             .buffer_size_tx = 4096,
             .timeout_ms = 30000};
         state.http_client = esp_http_client_init(&s3_cfg);
@@ -452,31 +546,12 @@ void trigger_delta_ota_update(void)
         if (esp_http_client_open(state.http_client, 0) == ESP_OK)
         {
             esp_http_client_fetch_headers(state.http_client);
-            state.content_length = esp_http_client_get_content_length(state.http_client);
-
-            ESP_LOGI(TAG, "Download size: %d bytes, Partition size: %" PRIu32 " bytes", state.content_length, state.new_partition->size);
-            if (state.content_length > state.new_partition->size && !is_delta)
-            {
-                ESP_LOGE(TAG, "Firmware too large for partition!");
-                esp_http_client_cleanup(state.http_client);
-                cJSON_Delete(json);
-                return;
-            }
-
             if (esp_ota_begin(state.new_partition, OTA_SIZE_UNKNOWN, &state.ota_handle) == ESP_OK)
             {
                 int res = -1;
-                if (is_delta)
+                if (s_pending_is_delta)
                 {
-                    if (state.content_length <= 0)
-                    {
-                        ESP_LOGE(TAG, "Delta update requires Content-Length");
-                        res = -1;
-                    }
-                    else
-                    {
-                        res = detools_apply_patch_callbacks(read_old_cb, seek_old_cb, read_patch_cb, state.content_length, write_new_cb, &state);
-                    }
+                    res = detools_apply_patch_callbacks(read_old_cb, seek_old_cb, read_patch_cb, state.content_length, write_new_cb, &state);
                 }
                 else
                 {
@@ -485,38 +560,33 @@ void trigger_delta_ota_update(void)
                     while (1)
                     {
                         int r = esp_http_client_read(state.http_client, buf, 2048);
-                        if (r < 0)
-                        {
-                            res = -1;
-                            break;
-                        }
-                        if (r == 0)
-                            break;
-
-                        // Decrypt chunk before writing (for full OTA fallback)
+                        if (r < 0) { res = -1; break; }
+                        if (r == 0) break;
                         mbedtls_aes_crypt_ctr(&state.aes_ctx, r, &state.nc_off, state.nonce_counter, state.stream_block, (unsigned char *)buf, (unsigned char *)buf);
-
-                        if (write_new_cb(&state, (uint8_t *)buf, r) != 0)
-                        {
-                            res = -1;
-                            break;
-                        }
+                        if (write_new_cb(&state, (uint8_t *)buf, r) != 0) { res = -1; break; }
                     }
                     free(buf);
                 }
 
                 if (res >= 0 && esp_ota_end(state.ota_handle) == ESP_OK)
                 {
-                    // Success! Clear failure count
+                    uint32_t duration_ms = (xTaskGetTickCount() - start_time) * portTICK_PERIOD_MS;
+                    char final_p[128];
+                    snprintf(final_p, sizeof(final_p), "{\"flash_time_ms\":%" PRIu32 ", \"update_available\":false}", duration_ms);
+                    esp_mqtt_client_publish(mqtt_client, "v1/devices/me/telemetry", final_p, 0, 1, 0);
+                    
+                    char log_success[128];
+                    snprintf(log_success, sizeof(log_success), "OTA Success in %" PRIu32 " ms! Rebooting to %s...", duration_ms, s_latest_ver_str);
+                    send_tb_log(log_success);
+                    
                     store_value("ota_fail_cnt", "0");
                     esp_ota_set_boot_partition(state.new_partition);
-                    ESP_LOGI(TAG, "OTA Success! Rebooting...");
-                    vTaskDelay(pdMS_TO_TICKS(2000));
+                    vTaskDelay(pdMS_TO_TICKS(3000));
                     esp_restart();
                 }
                 else
                 {
-                    ESP_LOGE(TAG, "OTA Apply Failed (%d). Marking failure in NVS.", res);
+                    send_tb_log("OTA Apply Failed! Marking for retry...");
                     char next_fail[16];
                     snprintf(next_fail, sizeof(next_fail), "%d", fail_count + 1);
                     store_value("ota_fail_cnt", next_fail);
@@ -526,11 +596,13 @@ void trigger_delta_ota_update(void)
         }
         esp_http_client_cleanup(state.http_client);
         mbedtls_aes_free(&state.aes_ctx);
+        s_ota_trigger_received = false; // Reset trigger on failure
     }
     else
     {
         ESP_LOGI(TAG, "Firmware is up-to-date.");
-        store_value("ota_fail_cnt", "0"); // Reset count if we are already current
+        s_update_available = false;
+        store_value("ota_fail_cnt", "0"); 
     }
 
     cJSON_Delete(json);

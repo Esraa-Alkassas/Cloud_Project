@@ -1,0 +1,144 @@
+.ota-dashboard {
+    background: #f4f7f6;
+    color: #333;
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    padding: 15px;
+    box-sizing: border-box;
+    overflow: hidden;
+}
+
+/* Header */
+.header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 15px;
+    padding-bottom: 10px;
+    border-bottom: 2px solid #ddd;
+}
+.title { font-size: 18px; font-weight: 800; color: #2c3e50; }
+.version-tag { 
+    background: #2c3e50; 
+    color: #fff; 
+    padding: 4px 10px; 
+    border-radius: 20px; 
+    font-size: 12px; 
+    font-weight: bold;
+}
+
+/* Grid */
+.stats-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: 10px;
+    margin-bottom: 15px;
+}
+.stat-card {
+    background: #fff;
+    padding: 12px;
+    border-radius: 8px;
+    text-align: center;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+}
+.stat-label { font-size: 10px; color: #888; margin-bottom: 5px; font-weight: bold; }
+.stat-value { font-size: 14px; font-weight: bold; color: #34495e; }
+
+/* LED Status */
+.led-container {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: 10px;
+    margin-bottom: 15px;
+}
+.led-card {
+    background: #fff;
+    padding: 10px;
+    border-radius: 8px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+}
+.led-bulb {
+    width: 24px;
+    height: 24px;
+    border-radius: 50%;
+    background: #444;
+    margin-bottom: 8px;
+    transition: all 0.2s ease;
+    border: 2px solid #ddd;
+}
+.led-label { font-size: 9px; font-weight: 800; color: #999; }
+
+/* LED Glowing States */
+.led-red-on { background: #ff4d4d; box-shadow: 0 0 12px #ff4d4d; border-color: #ffcccc; }
+.led-green-on { background: #2ecc71; box-shadow: 0 0 12px #2ecc71; border-color: #ccffdd; }
+.led-blue-on { background: #3498db; box-shadow: 0 0 12px #3498db; border-color: #cceeff; }
+
+/* Main Action */
+.main-action {
+    background: #fff;
+    padding: 20px;
+    border-radius: 8px;
+    margin-bottom: 15px;
+    text-align: center;
+    box-shadow: 0 4px 6px rgba(0,0,0,0.05);
+}
+.status-banner {
+    font-size: 14px;
+    font-weight: bold;
+    margin-bottom: 15px;
+    color: #7f8c8d;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+}
+.deploy-btn {
+    width: 100%;
+    padding: 14px;
+    background: #e74c3c;
+    color: white;
+    border: none;
+    border-radius: 6px;
+    font-size: 16px;
+    font-weight: bold;
+    cursor: pointer;
+    transition: all 0.3s ease;
+}
+.deploy-btn:hover:not(:disabled) { background: #c0392b; transform: translateY(-1px); }
+.deploy-btn:active:not(:disabled) { transform: translateY(0); }
+.deploy-btn:disabled { background: #bdc3c7; cursor: not-allowed; }
+
+/* Dynamic Classes */
+.ready-text { color: #27ae60 !important; }
+.ready-btn { background: #27ae60 !important; }
+.ready-btn:hover { background: #2ecc71 !important; }
+
+/* Logs */
+.log-container {
+    flex-grow: 1;
+    background: #1e1e1e;
+    border-radius: 8px;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+.log-header {
+    background: #2d2d2d;
+    color: #999;
+    padding: 6px 12px;
+    font-size: 11px;
+    font-weight: bold;
+}
+.log-window {
+    padding: 10px;
+    overflow-y: auto;
+    font-family: 'Consolas', 'Monaco', monospace;
+    font-size: 12px;
+    line-height: 1.5;
+    color: #00ff00;
+}
+.log-entry { margin-bottom: 4px; border-bottom: 1px solid #2d2d2d; padding-bottom: 2px; }
+.log-ts { color: #555; margin-right: 10px; }
