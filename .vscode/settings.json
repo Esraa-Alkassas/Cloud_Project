@@ -1,3 +1,9 @@
 {
-    "idf.currentSetup": "/opt/esp/idf"
+  "idf.currentSetup": "/opt/esp/idf",
+  "idf.openOcdConfigs": [
+    "board/esp32-wrover-kit-3.3v.cfg"
+  ],
+  "idf.customExtraVars": {
+    "IDF_TARGET": "esp32"
+  }
 }

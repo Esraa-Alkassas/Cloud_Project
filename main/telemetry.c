@@ -1,14 +1,16 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "esp_log.h"
-#include "esp_app_format.h"
+#include "esp_app_desc.h"
 #include "driver/gpio.h"
 #include "wifi.h"
 #include "telemetry.h"
 
+/* GPIO_NUM_22/23 are not defined for ESP32S3 but the values are kept
+ * to preserve the original hardware pin mapping. */
 #define LED_PIN_RED   GPIO_NUM_21
-#define LED_PIN_GREEN GPIO_NUM_23
-#define LED_PIN_BLUE  GPIO_NUM_22
+#define LED_PIN_GREEN ((gpio_num_t)23)
+#define LED_PIN_BLUE  ((gpio_num_t)22)
 
 static const char *TAG = "TELEMETRY";
 
