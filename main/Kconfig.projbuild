@@ -71,3 +71,27 @@ menu "WiFi Configuration"
     endchoice
 
 endmenu
+
+menu "OTA / Metrics Configuration"
+
+    config OTA_POLL_INTERVAL_MS
+        int "OTA poll interval (ms)"
+        default 31000
+        help
+            How often the device polls the Lambda for firmware updates.
+
+    config OTA_API_URL
+        string "OTA API Gateway URL"
+        default "https://kavm965brg.execute-api.us-east-1.amazonaws.com/check"
+        help
+            Full URL of the API Gateway check endpoint.
+
+    config TELEMETRY_ENABLE
+        bool "Enable MQTT/ThingsBoard telemetry"
+        default n
+        help
+            When enabled, connects to ThingsBoard via MQTT and publishes LED
+            states and firmware version. Disabled by default as ThingsBoard
+            is being phased out. Code remains compilable either way.
+
+endmenu

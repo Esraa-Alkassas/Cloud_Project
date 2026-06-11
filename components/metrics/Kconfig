@@ -1,0 +1,18 @@
+menu "Metrics Configuration"
+
+    config METRICS_ENABLE
+        bool "Enable metrics emission over serial"
+        default y
+        help
+            When enabled, emits structured JSON metric lines prefixed with ##M##
+            to UART0. Disable to compile out all instrumentation.
+
+    config METRICS_DEVICE_ID
+        string "Device ID string"
+        default "esp32-A"
+        depends on METRICS_ENABLE
+        help
+            Short identifier embedded in every metric line as the "dev" field.
+            Use distinct IDs when running two boards simultaneously.
+
+endmenu

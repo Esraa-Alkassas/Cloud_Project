@@ -1,0 +1,4 @@
+pyserial>=3.5
+matplotlib>=3.7
+boto3>=1.28
+detools>=0.52
