@@ -62,8 +62,8 @@ TOOL_DEFS = {
         "note":   "classic bsdiff 4.3 (bzip2-internal)",
     },
     "hdiffpatch": {
-        "create": ["hdiffz",  "{old}", "{new}", "{patch}"],
-        "apply":  ["hpatchz", "{old}", "{patch}", "{out}"],
+        "create": ["hdiffz",  "-f", "{old}", "{new}", "{patch}"],
+        "apply":  ["hpatchz", "-f", "{old}", "{patch}", "{out}"],
         "ver":    ["hdiffz",  "--version"],
         "note":   "HDiffPatch default settings",
     },

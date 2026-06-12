@@ -87,7 +87,7 @@ All 9 pairs are base → variant (no chained updates). Pairs were registered in 
 | `full` | — | n/a | Full-image OTA baseline (patch_size = new_size). |
 | `full_gz` | `gzip` | system | Full image gzip-9 compressed. Trivial alternative to deltas. |
 
-> **hdiffpatch** (tag `hdiffpatch`): binary `hdiffz`/`hpatchz` — rows omitted from this run because hdiffpatch requires source compilation (not in Ubuntu apt) and was not yet available at run time. To append hdiffpatch rows: install hdiffpatch, then run `python tools/bench_diff.py run --tools hdiffpatch --reps 5`. All other rows remain valid.
+| `hdiffpatch` | `hdiffz`/`hpatchz` | v4.12.2 | HDiffPatch default settings. Built from source (not in Ubuntu apt): `make LZMA=0 ZSTD=0 LDEF=0 ZLIB=2 BSD=0`. See `tools/README.md` for the full build recipe. |
 
 ---
 
@@ -344,13 +344,9 @@ The corrected `bench_diff.py` is committed to `feat/runtim-mesurments`.
 
 ---
 
-## 11. Pending
+## 11. Notes
 
-- **hdiffpatch rows** — HDiffPatch (`hdiffz`/`hpatchz`) must be compiled from source on Ubuntu (not in apt). Once installed, run:
-  ```bash
-  python tools/bench_diff.py run --corpus corpus/bins/ --out results/stage1/ --tools hdiffpatch --reps 5
-  ```
-  Then regenerate tables and plots. Existing rows are not re-run (append mode).
+- **hdiffpatch build quirk** — HDiffPatch's Makefile expects lzma/bzip2 sources as sibling directories outside the repo. On Ubuntu, work around this by disabling the source-compiled deps and using system libraries: `make LZMA=0 ZSTD=0 LDEF=0 ZLIB=2 BSD=0` after installing `libbz2-dev`. This produces a fully functional `hdiffz`/`hpatchz` with zlib and bzip2 compression support (lzma and zstd disabled). Full steps in `tools/README.md`.
 
 ---
 

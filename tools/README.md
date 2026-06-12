@@ -135,9 +135,13 @@ pip install detools>=0.52 cryptography>=41.0
 apt-get install -y bsdiff xdelta3
 
 # hdiffpatch is NOT in Ubuntu apt — build from source (~2 min):
-cd /tmp && git clone --depth=1 https://github.com/sisong/HDiffPatch.git hdiffpatch_src \
-  && cd hdiffpatch_src && make -j$(nproc) hdiffz hpatchz \
-  && cp hdiffz hpatchz /usr/local/bin/
+# The Makefile references ../lzma and ../bzip2 as sibling dirs; disable them
+# and use system libs instead (LZMA=0 ZSTD=0 LDEF=0 ZLIB=2 with libbz2-dev installed).
+apt-get install -y libbz2-dev libzstd-dev
+cd /tmp && git clone --depth=1 https://github.com/sisong/HDiffPatch.git hdiffpatch_src
+cd /tmp/hdiffpatch_src
+make hdiffz hpatchz LZMA=0 ZSTD=0 LDEF=0 ZLIB=2 MD5=0 XXH=0 VCD=0 DIR_DIFF=0 MT=0 BSD=0
+cp hdiffz hpatchz /usr/local/bin/
 
 pip install detools>=0.52 cryptography>=41.0 matplotlib numpy pandas
 ```
