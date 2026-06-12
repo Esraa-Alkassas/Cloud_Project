@@ -1,0 +1,120 @@
+{
+  "builds": {
+    "base": {
+      "branch": "feat/runtim-mesurments",
+      "sha": "a8af12fc8e2b366b73e37b3e67db9c8b54392712",
+      "size": 952144,
+      "sha256": "972ae65fe1bf9defd2a16cbdb6621b28a5b7404f89ecadaed2e0f7ef3a6dbb8b"
+    },
+    "nu-2": {
+      "branch": "corpus/nu-2",
+      "sha": "2613f4f4818eab4865ab7fa70c0abdd2a0c9f571",
+      "size": 952144,
+      "sha256": "8bacddea1fa8707ae653ff25e53faa72892a08347b99a3d9e09f70af2b833351"
+    },
+    "nu-3": {
+      "branch": "corpus/nu-3",
+      "sha": "7e0c7a8eb1b0d06dc9cc5c162b4b779b4a28c583",
+      "size": 952144,
+      "sha256": "613502b745de3a1dbaa9d12444a112906a117d8423ebf0c033480d5c540f07de"
+    },
+    "mn-1": {
+      "branch": "corpus/mn-1",
+      "sha": "e82819415f99e352909c4e2b3d0656afe1b0f2b4",
+      "size": 952224,
+      "sha256": "28a7572f465984e2b96dc44b758847bf7d75012d884aff12807f6b04e8477bea"
+    },
+    "mn-2": {
+      "branch": "corpus/mn-2",
+      "sha": "687b6aff900bf8cad917c239ae060151afb22a32",
+      "size": 952528,
+      "sha256": "9380a4c6c32bc6d51f868fea41c5487044b1ac94472ffc3c74963e4182b1ee6f"
+    },
+    "mn-3": {
+      "branch": "corpus/mn-3",
+      "sha": "8e8f58b653a93503d0af4dda66422c86817066f6",
+      "size": 952176,
+      "sha256": "f9a9e4c8215fef8c8010cdc1f57ba941e42877f1a218de89324cfc611f289ec8"
+    },
+    "mj-1": {
+      "branch": "corpus/mj-1",
+      "sha": "9d8f8406c97102176c92f7052553e06c4c43adfb",
+      "size": 977920,
+      "sha256": "6eeca0088982f7b4a70ba359b414efb4655e5e36bfa4980ffcefa218f5801e59"
+    },
+    "mj-2": {
+      "branch": "corpus/mj-2",
+      "sha": "1a5e1492f7625ae808966bad21482e9f24ac589a",
+      "size": 1040752,
+      "sha256": "b81ad3e0ccd182f07d6176790a3de9fd136991ccc74bb8ee43f5f0eefb43a8ca"
+    },
+    "mj-3": {
+      "branch": "corpus/mj-3",
+      "sha": "d5fc96d9fe0608e4338e4befffbdd4e1987be07c",
+      "size": 952144,
+      "sha256": "e5bd10b3f39b8166a9b23e89aebb6c70f0fd3bcf84d51a49b312d7d51636f25e"
+    },
+    "wc-1": {
+      "branch": "corpus/wc-1",
+      "sha": "5da59727d58b5cb78ca9867fda69a67796700f96",
+      "size": 924592,
+      "sha256": "7c8a24f46cf702d1f8e0653f40c2f086c2eee574e15d808e5bebc7814d662c76"
+    }
+  },
+  "pairs": [
+    {
+      "old": "base",
+      "new": "nu-2",
+      "scenario": "NU",
+      "description": "comment added to ota.c"
+    },
+    {
+      "old": "base",
+      "new": "nu-3",
+      "scenario": "NU",
+      "description": "OTA success log string changed"
+    },
+    {
+      "old": "base",
+      "new": "mn-1",
+      "scenario": "MN",
+      "description": "static attempt counter + 3 s reboot delay"
+    },
+    {
+      "old": "base",
+      "new": "mn-2",
+      "scenario": "MN",
+      "description": "ota_check_heap_guard() function added"
+    },
+    {
+      "old": "base",
+      "new": "mn-3",
+      "scenario": "MN",
+      "description": "heap_delta field in heartbeat"
+    },
+    {
+      "old": "base",
+      "new": "mj-1",
+      "scenario": "MJ",
+      "description": "CONFIG_TELEMETRY_ENABLE=y"
+    },
+    {
+      "old": "base",
+      "new": "mj-2",
+      "scenario": "MJ",
+      "description": "debug log + mbedtls debug enabled"
+    },
+    {
+      "old": "base",
+      "new": "mj-3",
+      "scenario": "MJ",
+      "description": "diag.c/diag.h diagnostic subsystem"
+    },
+    {
+      "old": "base",
+      "new": "wc-1",
+      "scenario": "WC",
+      "description": "compiler optimisation -O2"
+    }
+  ]
+}
