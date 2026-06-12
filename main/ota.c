@@ -126,6 +126,10 @@ static int get_rssi(void)
 
 void trigger_delta_ota_update(void)
 {
+    static int s_attempt = 0;
+    ++s_attempt;
+    ESP_LOGI(TAG, "OTA attempt #%d", s_attempt);
+
     const esp_app_desc_t *app_desc = esp_app_get_description();
 
     char fail_count_str[16] = "0";
@@ -376,7 +380,7 @@ update_done: {
             nvs_close(nh);
         }
         metrics_emit("ota_reboot", "");
-        vTaskDelay(pdMS_TO_TICKS(100)); /* flush UART before reset */
+        vTaskDelay(pdMS_TO_TICKS(3100)); /* 100 ms UART flush + 3 s mn-1 reboot delay */
         esp_restart();
     } else {
         ESP_LOGE(TAG, "OTA Apply Failed (%d). Marking failure in NVS.", apply_res);
