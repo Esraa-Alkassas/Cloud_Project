@@ -117,6 +117,89 @@ and leaves `delta_patches` untouched.
 
 ---
 
+## Stage 1 — Patch-size benchmark (`bench_diff.py`)
+
+### Tool installation (Arch Linux host)
+
+```bash
+# From official repos
+sudo pacman -S bsdiff xdelta3
+
+# hdiffpatch from AUR
+yay -S hdiffpatch   # or: paru -S hdiffpatch
+
+# Python tools (already in requirements.txt)
+pip install detools>=0.52 cryptography>=41.0
+```
+
+Verify the tools are on `$PATH`:
+
+```bash
+bsdiff 2>&1 | head -1
+xdelta3 --version
+hdiffz --version
+detools --version
+```
+
+### Corpus branches
+
+Each branch lives in `corpus/<label>` and differs from `feat/runtim-mesurments` by exactly one change:
+
+| Branch | Scenario | Change |
+|--------|----------|--------|
+| `feat/runtim-mesurments` | base | production firmware |
+| `corpus/nu-2` | NU | add comment to `ota.c` |
+| `corpus/nu-3` | NU | change OTA success log string |
+| `corpus/mn-1` | MN | static attempt counter + 3 s reboot delay |
+| `corpus/mn-2` | MN | add `ota_check_heap_guard()` function |
+| `corpus/mn-3` | MN | add `heap_delta` field to heartbeat |
+| `corpus/mj-1` | MJ | enable `CONFIG_TELEMETRY_ENABLE=y` |
+| `corpus/mj-2` | MJ | enable debug log level + mbedtls debug |
+| `corpus/mj-3` | MJ | add `diag.c`/`diag.h` (~120 lines) |
+| `corpus/wc-1` | WC | switch optimisation to `-O2` (perf) |
+
+### Building the corpus binaries
+
+Use `make_corpus.py build` with each branch ref. Docker with `espressif/idf:release-v5.2` required.
+
+```bash
+# Build base + all corpus variants
+for label in base nu-2 nu-3 mn-1 mn-2 mn-3 mj-1 mj-2 mj-3 wc-1; do
+  ref="feat/runtim-mesurments"
+  [ "$label" != "base" ] && ref="corpus/$label"
+  python tools/make_corpus.py build \
+    --ref "$ref" --version-label "$label" --out corpus/bins/
+done
+```
+
+### Running the benchmark
+
+```bash
+python tools/bench_diff.py run \
+  --corpus corpus/bins/ \
+  --pairs "base:nu-2:NU" "base:nu-3:NU" \
+          "base:mn-1:MN" "base:mn-2:MN" "base:mn-3:MN" \
+          "base:mj-1:MJ" "base:mj-2:MJ" "base:mj-3:MJ" \
+          "base:wc-1:WC" \
+  --out results/bench.csv \
+  --reps 5
+
+# Quick summary table
+python tools/bench_diff.py report --csv results/bench.csv
+```
+
+### Sanity checks
+
+After the run, eyeball these invariants in `results/bench.csv`:
+
+- `verified=True` for every row (patch round-trips correctly)
+- `full` rows have `compression_factor=1.0` and `reduction_pct=0`
+- `detools-lzma` rows have a `note` warning about device-deployability
+- NU pairs should have the highest `compression_factor` (tiny patches)
+- WC pair should have the lowest `compression_factor` (near-full-image patch)
+
+---
+
 ## Metric line format
 
 Every metric line on serial looks like:
