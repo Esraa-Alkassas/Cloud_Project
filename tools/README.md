@@ -119,20 +119,35 @@ and leaves `delta_patches` untouched.
 
 ## Stage 1 — Patch-size benchmark (`bench_diff.py`)
 
-### Tool installation (Arch Linux host)
+### Tool installation
+
+**On the Arch Linux host (outside devcontainer):**
 
 ```bash
-# From official repos
 sudo pacman -S bsdiff xdelta3
-
-# hdiffpatch from AUR
-yay -S hdiffpatch   # or: paru -S hdiffpatch
-
-# Python tools (already in requirements.txt)
+yay -S hdiffpatch          # or: paru -S hdiffpatch
 pip install detools>=0.52 cryptography>=41.0
 ```
 
-Verify the tools are on `$PATH`:
+**Inside the ESP-IDF devcontainer (Ubuntu 22.04) — required for corpus builds:**
+
+```bash
+apt-get install -y bsdiff xdelta3
+
+# hdiffpatch is NOT in Ubuntu apt — build from source (~2 min):
+cd /tmp && git clone --depth=1 https://github.com/sisong/HDiffPatch.git hdiffpatch_src \
+  && cd hdiffpatch_src && make -j$(nproc) hdiffz hpatchz \
+  && cp hdiffz hpatchz /usr/local/bin/
+
+pip install detools>=0.52 cryptography>=41.0 matplotlib numpy pandas
+```
+
+> **Note for replication:** hdiffpatch has no Ubuntu package and no published binary release.
+> The source-build step above is required on any Ubuntu/Debian machine.
+> On Arch, `yay -S hdiffpatch` is simpler. The compiled binaries (`hdiffz`, `hpatchz`) are
+> what bench_diff.py calls — just ensure they are on `$PATH`.
+
+Verify all tools:
 
 ```bash
 bsdiff 2>&1 | head -1
@@ -160,15 +175,30 @@ Each branch lives in `corpus/<label>` and differs from `feat/runtim-mesurments` 
 
 ### Building the corpus binaries
 
-Use `make_corpus.py build` with each branch ref. Docker with `espressif/idf:release-v5.2` required.
+**Inside the devcontainer** (Docker not available there — use `build_corpus.py`):
 
 ```bash
-# Build base + all corpus variants
+# Preview what will be built
+python tools/build_corpus.py --dry-run
+
+# Build all 10 binaries (~60–80 min, logs per-build in results/stage1/)
+python tools/build_corpus.py --out corpus/bins/ --manifest-out results/stage1/
+
+# Re-run skipping already-built binaries
+python tools/build_corpus.py --out corpus/bins/ --skip-existing
+```
+
+Per-build logs land at `results/stage1/build_<label>.log`.
+A JSON manifest at `results/stage1/corpus_builds.json` records label, branch,
+git SHA, build time, binary size, and SHA256 for every build.
+
+**On the Arch host** (Docker available — uses `make_corpus.py` directly):
+
+```bash
 for label in base nu-2 nu-3 mn-1 mn-2 mn-3 mj-1 mj-2 mj-3 wc-1; do
   ref="feat/runtim-mesurments"
   [ "$label" != "base" ] && ref="corpus/$label"
-  python tools/make_corpus.py build \
-    --ref "$ref" --version-label "$label" --out corpus/bins/
+  python tools/make_corpus.py build --ref "$ref" --version-label "$label" --out corpus/bins/
 done
 ```
 

@@ -75,8 +75,11 @@ def cmd_build(args):
     sha = result.stdout.strip()
     print(f"Building ref={args.ref} ({sha[:12]}) as label={label}")
 
-    with tempfile.TemporaryDirectory(prefix="corpus_wt_") as wt_dir:
-        # Create a git worktree at the ref
+    # Use a parent temp dir so the worktree path (parent/wt) does NOT pre-exist,
+    # which is required by git worktree add.
+    base_dir = tempfile.mkdtemp(prefix="corpus_")
+    wt_dir   = os.path.join(base_dir, "wt")
+    try:
         subprocess.run(["git", "worktree", "add", "--detach", wt_dir, sha],
                        check=True, cwd=git_root)
         try:
@@ -84,15 +87,20 @@ def cmd_build(args):
             with open(os.path.join(wt_dir, "version.txt"), "w") as f:
                 f.write(label)
 
-            # Build inside devcontainer image
-            print("Running docker build (this may take a few minutes)…")
-            subprocess.run([
-                "docker", "run", "--rm",
-                "-v", f"{wt_dir}:/workspace",
-                "espressif/idf:release-v5.2",
-                "bash", "-c",
-                "cd /workspace && . /opt/esp/idf/export.sh 2>/dev/null && idf.py build",
-            ], check=True)
+            if getattr(args, "local_idf", False):
+                # Build using idf.py already in PATH (no Docker required).
+                print("Running idf.py build (local IDF)…")
+                subprocess.run(["idf.py", "build"],
+                               check=True, cwd=wt_dir)
+            else:
+                print("Running docker build (this may take a few minutes)…")
+                subprocess.run([
+                    "docker", "run", "--rm",
+                    "-v", f"{wt_dir}:/workspace",
+                    "espressif/idf:release-v5.2",
+                    "bash", "-c",
+                    "cd /workspace && . /opt/esp/idf/export.sh 2>/dev/null && idf.py build",
+                ], check=True)
 
             built_bin = os.path.join(wt_dir, "build", "wifi_station.bin")
             if not os.path.exists(built_bin):
@@ -120,6 +128,8 @@ def cmd_build(args):
         finally:
             subprocess.run(["git", "worktree", "remove", "--force", wt_dir],
                            cwd=git_root, capture_output=True)
+    finally:
+        shutil.rmtree(base_dir, ignore_errors=True)
 
 
 # ---------------------------------------------------------------------------
@@ -221,6 +231,8 @@ def main():
     p.add_argument("--ref",           required=True, help="git ref (branch, tag, SHA)")
     p.add_argument("--version-label", required=True, help="Label for version.txt (e.g. v1)")
     p.add_argument("--out",           default="corpus/", help="Output directory")
+    p.add_argument("--local-idf",     action="store_true",
+                   help="Use idf.py in PATH instead of Docker (required inside devcontainer)")
 
     p = sub.add_parser("pair", help="Generate a delta patch between two binaries")
     p.add_argument("--old",      required=True, help="Path to old .bin")
