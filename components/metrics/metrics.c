@@ -27,7 +27,7 @@ void metrics_emit(const char *event, const char *fmt, ...)
     int64_t t = esp_timer_get_time();
     uint32_t seq = s_seq++;
 
-    char extra[384] = {0};
+    char extra[512] = {0};
     if (fmt && fmt[0] != '\0') {
         va_list ap;
         va_start(ap, fmt);
@@ -36,11 +36,11 @@ void metrics_emit(const char *event, const char *fmt, ...)
     }
 
     if (extra[0] != '\0') {
-        printf("##M## {\"v\":1,\"seq\":%" PRIu32 ",\"t_us\":%" PRId64
+        printf("##M## {\"v\":2,\"seq\":%" PRIu32 ",\"t_us\":%" PRId64
                ",\"fw\":\"%s\",\"dev\":\"%s\",\"ev\":\"%s\",%s}\n",
                seq, t, desc->version, CONFIG_METRICS_DEVICE_ID, event, extra);
     } else {
-        printf("##M## {\"v\":1,\"seq\":%" PRIu32 ",\"t_us\":%" PRId64
+        printf("##M## {\"v\":2,\"seq\":%" PRIu32 ",\"t_us\":%" PRId64
                ",\"fw\":\"%s\",\"dev\":\"%s\",\"ev\":\"%s\"}\n",
                seq, t, desc->version, CONFIG_METRICS_DEVICE_ID, event);
     }
@@ -74,8 +74,8 @@ void metrics_init(void)
     const char *part_label = part ? part->label : "unknown";
 
     metrics_emit("boot",
-                 "\"reset_reason\":%d,\"part\":\"%s\",\"prev_boot_marker\":%d",
-                 reset_reason, part_label, (int)boot_pend);
+                 "\"reset_reason\":%d,\"part\":\"%s\",\"prev_boot_marker\":%d,\"t_app_ms\":%" PRId64,
+                 reset_reason, part_label, (int)boot_pend, esp_timer_get_time() / 1000);
 
     xTaskCreate(heartbeat_task, "metrics_hb", 2048, NULL, 3, NULL);
 }

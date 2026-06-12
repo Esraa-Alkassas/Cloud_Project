@@ -94,4 +94,22 @@ menu "OTA / Metrics Configuration"
             states and firmware version. Disabled by default as ThingsBoard
             is being phased out. Code remains compilable either way.
 
+    config OTA_FORCE_FULL
+        bool "Force full-image OTA (skip delta even if available)"
+        default n
+        help
+            When y, appends force_full=1 to every broker check URL, causing
+            the Lambda to return a full-image URL regardless of patch
+            availability. Used for Stage 2 full-image baseline experiments.
+            The Lambda already supports this parameter; no cloud changes needed.
+
+    config METRICS_OTA_PROGRESS
+        bool "Emit ota_progress events during transfer (debug only)"
+        depends on METRICS_ENABLE
+        default n
+        help
+            Emits an ota_progress metric event every 128 KB of patch transfer.
+            Distorts timing measurements due to UART overhead; NEVER enable
+            during timed campaign runs. Useful only for debugging the OTA path.
+
 endmenu

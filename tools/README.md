@@ -239,19 +239,85 @@ After the run, eyeball these invariants in `results/bench.csv`:
 Every metric line on serial looks like:
 
 ```
-##M## {"v":1,"seq":17,"t_us":123456789,"fw":"1748000000-ab12cd3","dev":"esp32-A","ev":"boot","reset_reason":1,"part":"ota_0","prev_boot_marker":1}
+##M## {"v":2,"seq":17,"t_us":123456789,"fw":"1748000000-ab12cd3","dev":"esp32-A","ev":"boot","reset_reason":1,"part":"ota_0","prev_boot_marker":1,"t_app_ms":412}
 ```
 
 - `##M## ` prefix — survives interleaved ESP_LOG noise; grep-friendly.
-- `v` — schema version (1).
+- `v` — schema version (2 from Stage 2 onwards).
 - `seq` — monotonically increasing per boot; gaps indicate dropped UART lines.
 - `t_us` — µs since boot (`esp_timer_get_time()`).
 - `fw` — firmware version from app descriptor.
 - `dev` — `CONFIG_METRICS_DEVICE_ID` (default `esp32-A`).
 - `ev` — event name.
 
-Stage 0 events:
+Events (schema v2):
 | Event | Extra fields |
 |-------|-------------|
-| `boot` | `reset_reason`, `part`, `prev_boot_marker` |
+| `boot` | `reset_reason`, `part`, `prev_boot_marker`, `t_app_ms` |
 | `heartbeat` | `heap_free`, `heap_min` (bytes) |
+| `ota_check` | `rtt_ms`, `http` (status code), `update`, `is_delta`, `rssi`, `heap_free` |
+| `ota_start` | `is_delta`, `fw_to`, `force_full`, `rssi`, `heap_min` |
+| `ota_summary` | `ok`, `err`, `is_delta`, `t_total_ms`, `t_connect_ms`, `t_apply_wall_ms`, `t_http`, `t_decrypt`, `t_from_read`, `t_flash`, `t_seek`, `t_finalize_ms`, `b_patch`, `b_flash`, `b_from`, `calls_r`, `calls_w`, `rssi`, `heap_min_during` |
+| `ota_reboot` | *(none; serial timestamp is the reboot-time anchor)* |
+
+All time fields in `ota_summary` are in **milliseconds**. Accumulator fields (`t_http`, `t_decrypt`, `t_from_read`, `t_flash`, `t_seek`) are derived in the harness to yield:
+- `goodput_kBps = b_patch / t_http`
+- `flash_kBps = b_flash / t_flash`
+- `t_reboot_ms` = wall-clock diff `recv_utc(boot) − recv_utc(ota_reboot)` (serial-buffer jitter ≤100 ms)
+- `t_downtime_ms = t_reboot_ms + boot.t_app_ms`
+- `t_unaccounted_ms = t_apply_wall_ms − (t_http + t_decrypt + t_from_read + t_flash + t_seek)` — this is diff-CPU + scheduling overhead; should be positive and <25% of wall time.
+
+---
+
+## Stage 2 — On-device time decomposition
+
+### Kconfig options added (in `main/Kconfig.projbuild`)
+
+| Option | Default | Purpose |
+|--------|---------|---------|
+| `CONFIG_OTA_FORCE_FULL` | n | Appends `force_full=1` to every broker check; forces full-image OTA. Used for the Stage 2 full-image baseline. |
+| `CONFIG_METRICS_OTA_PROGRESS` | n | Emits `ota_progress` event every 128 KB (debug only — **never** enable during timed runs). |
+
+### Experiment protocol
+
+**Before starting a campaign:**
+1. `CONFIG_TELEMETRY_ENABLE=n`, `CONFIG_METRICS_OTA_PROGRESS=n` in `sdkconfig.defaults`.
+2. Board placement and AP unchanged for the entire campaign; note RSSI from `ota_check` events.
+3. Both versions in the ping-pong must carry Stage-2 instrumentation (build them from `feat/stage2-timing` or rebased `corpus/*` branches).
+
+**Campaigns to run (N=10 valid runs each):**
+| Campaign | Branch pair | `OTA_FORCE_FULL` | Priority |
+|----------|-------------|-----------------|---------|
+| MN-delta | `base` ↔ `corpus/mn-1` (or mn-2/mn-3) | n | Primary |
+| MN-full  | same pair | y (recompile) | Primary |
+| NU-delta | `base` ↔ `corpus/nu-2` | n | Secondary |
+| MJ-delta | `base` ↔ `corpus/mj-3` | n | Secondary |
+
+**Running a campaign:**
+```bash
+# 1. Flash instrumented firmware (inside devcontainer)
+echo "$(date +%s)-stage2a" > version.txt && idf.py build flash
+
+# 2. Close the monitor, then on the host:
+python tools/harness.py campaign \
+  --port /dev/ttyUSB0 --db results/stage2/runs.db \
+  --experiment MN_DELTA_01 \
+  --version-a <sha_base> --version-b <sha_mn1> \
+  --runs 10 --settle 20
+
+# 3. Export to CSV (includes derived columns)
+python tools/harness.py export \
+  --db results/stage2/runs.db --experiment MN_DELTA_01 \
+  --out results/stage2/MN_DELTA_01.csv
+
+# 4. Generate plots
+python tools/harness.py plot \
+  --db results/stage2/runs.db --experiment MN_DELTA_01 \
+  --out results/stage2/plots/
+```
+
+**Sanity checks on results:**
+- `t_unaccounted_ms` positive and <25% of `t_apply_wall_ms` in all valid runs.
+- Flash throughput (`flash_kBps`) roughly constant across runs (±15%).
+- Ordering: NU total time < MN < MJ; delta total < full for NU/MN pairs.
+- RSSI ≥ −75 dBm in all valid runs (harness auto-excludes weaker-signal runs).
