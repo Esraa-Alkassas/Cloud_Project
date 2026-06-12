@@ -77,7 +77,7 @@ void metrics_init(void)
                  "\"reset_reason\":%d,\"part\":\"%s\",\"prev_boot_marker\":%d,\"t_app_ms\":%" PRId64,
                  reset_reason, part_label, (int)boot_pend, esp_timer_get_time() / 1000);
 
-    xTaskCreate(heartbeat_task, "metrics_hb", 2048, NULL, 3, NULL);
+    xTaskCreate(heartbeat_task, "metrics_hb", 3072, NULL, 3, NULL);
 }
 
 #endif /* CONFIG_METRICS_ENABLE */
