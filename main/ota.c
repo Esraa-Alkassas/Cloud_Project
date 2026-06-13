@@ -73,7 +73,7 @@ static int seek_old_cb(void *arg_p, int offset)
 {
     struct patch_state_t *s = (struct patch_state_t *)arg_p;
     int64_t t0 = metrics_now_us();
-    s->old_read_offset = offset;
+    s->old_read_offset += offset;   /* relative seek from current position */
     s->acc_seek_us += metrics_now_us() - t0;
     return 0;
 }
