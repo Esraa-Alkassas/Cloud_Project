@@ -21,6 +21,8 @@
 
 static const char *TAG = "OTA_DELTA";
 
+#define HTTP_PREFETCH_SIZE 10240   /* one HTTP-client buffer's worth per fill */
+
 struct patch_state_t {
     const esp_partition_t   *old_partition;
     const esp_partition_t   *new_partition;
@@ -35,6 +37,10 @@ struct patch_state_t {
     size_t              nc_off;
     unsigned char       nonce_counter[16];
     unsigned char       stream_block[16];
+    /* Pre-fetch buffer: read HTTP in HTTP_PREFETCH_SIZE chunks, serve detools 512 B at a time */
+    uint8_t *prefetch_buf;
+    size_t   prefetch_pos;
+    size_t   prefetch_len;
     /* Stage 2: per-callback accumulating timers (~1 µs/call overhead from esp_timer_get_time pairs) */
     int64_t acc_http_us;
     int64_t acc_decrypt_us;
@@ -77,25 +83,46 @@ static int read_patch_cb(void *arg_p, uint8_t *buf_p, size_t size)
     struct patch_state_t *s = (struct patch_state_t *)arg_p;
     size_t total = 0;
     int64_t t0 = metrics_now_us();
-    int zero_retries = 0;
+
     while (total < size) {
-        int r = esp_http_client_read(s->http_client, (char *)(buf_p + total), size - total);
-        if (r < 0) {
-            s->acc_http_us += metrics_now_us() - t0;
-            return -1;
-        }
-        if (r == 0) {
-            /* r=0 can occur transiently between TLS records; retry up to ~1 s */
-            if (++zero_retries > 100) {
-                s->acc_http_us += metrics_now_us() - t0;
-                return -1;
-            }
-            vTaskDelay(pdMS_TO_TICKS(10));
+        /* Serve from the pre-fetch buffer first */
+        if (s->prefetch_pos < s->prefetch_len) {
+            size_t avail = s->prefetch_len - s->prefetch_pos;
+            size_t take  = avail < (size - total) ? avail : (size - total);
+            memcpy(buf_p + total, s->prefetch_buf + s->prefetch_pos, take);
+            s->prefetch_pos += take;
+            total           += take;
             continue;
         }
-        zero_retries = 0;
-        total += r;
+
+        /* Buffer drained: refill from HTTP in one large read */
+        s->prefetch_pos = 0;
+        s->prefetch_len = 0;
+        int zero_retries = 0;
+        while (s->prefetch_len == 0) {
+            int r = esp_http_client_read(s->http_client,
+                                         (char *)s->prefetch_buf,
+                                         HTTP_PREFETCH_SIZE);
+            if (r < 0) {
+                s->acc_http_us += metrics_now_us() - t0;
+                ESP_LOGE(TAG, "HTTP read error %d (patch so far: %d B)", r, s->patch_bytes_read);
+                return -1;
+            }
+            if (r == 0) {
+                /* r=0 can occur transiently between TLS records; retry up to ~1 s */
+                if (++zero_retries > 100) {
+                    s->acc_http_us += metrics_now_us() - t0;
+                    ESP_LOGE(TAG, "HTTP read stalled after %d B", s->patch_bytes_read);
+                    return -1;
+                }
+                vTaskDelay(pdMS_TO_TICKS(10));
+            } else {
+                s->prefetch_len = (size_t)r;
+                zero_retries    = 0;
+            }
+        }
     }
+
     s->acc_http_us += metrics_now_us() - t0;
     t0 = metrics_now_us();
     mbedtls_aes_crypt_ctr(&s->aes_ctx, size, &s->nc_off,
@@ -266,6 +293,12 @@ void trigger_delta_ota_update(void)
         .last_pct      = -1,
     };
 
+    state.prefetch_buf = malloc(HTTP_PREFETCH_SIZE);
+    if (!state.prefetch_buf) {
+        ESP_LOGE(TAG, "Failed to allocate HTTP prefetch buffer");
+        goto update_done;
+    }
+
     unsigned char key[16] = "1234567890123456";
     unsigned char iv[16]  = "abcdefghijklmnop";
     mbedtls_aes_init(&state.aes_ctx);
@@ -402,6 +435,7 @@ update_done: {
     if (state.http_client) {
         esp_http_client_cleanup(state.http_client);
     }
+    free(state.prefetch_buf);
     mbedtls_aes_free(&state.aes_ctx);
     cJSON_Delete(json);
     }

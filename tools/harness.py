@@ -936,11 +936,11 @@ def cmd_campaign(args):
         conn.close()
 
     # Summary
-    all_runs = sqlite3.connect(args.db).execute(
-        "SELECT * FROM runs WHERE exp_id=? ORDER BY run_num", (args.experiment,)
-    ).fetchall()
-    valid_runs = [r for r in all_runs if r[sqlite3.Row if hasattr(sqlite3.Row, '__getitem__') else 0]]
-    print(f"\nRuns recorded: {len(all_runs)}  (check DB for valid/excluded breakdown)")
+    _db = sqlite3.connect(args.db)
+    all_runs   = _db.execute("SELECT COUNT(*) FROM runs WHERE exp_id=?",        (args.experiment,)).fetchone()[0]
+    valid_runs = _db.execute("SELECT COUNT(*) FROM runs WHERE exp_id=? AND valid=1", (args.experiment,)).fetchone()[0]
+    _db.close()
+    print(f"\nRuns recorded: {all_runs}  valid: {valid_runs}  (check DB for excluded breakdown)")
     print(f"DB: {args.db}  Experiment: {args.experiment}")
 
 
