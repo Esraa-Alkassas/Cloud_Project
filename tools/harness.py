@@ -230,7 +230,7 @@ def cmd_capture(args):
     insert_experiment(conn, args.experiment, args.scenario, args.note)
 
     try:
-        ser = serial.Serial(args.port, args.baud, timeout=1)
+        ser = serial.Serial(args.port, args.baud, timeout=1, dsrdtr=False, rtscts=False)
     except serial.SerialException as e:
         msg = str(e)
         if "Permission" in msg or "busy" in msg.lower() or "Device or resource busy" in msg:
@@ -587,7 +587,7 @@ def cmd_tail(args):
         sys.exit("pyserial not installed — run: pip install pyserial")
 
     try:
-        ser = serial.Serial(args.port, args.baud, timeout=1)
+        ser = serial.Serial(args.port, args.baud, timeout=1, dsrdtr=False, rtscts=False)
     except serial.SerialException as e:
         msg = str(e)
         if "Permission" in msg or "busy" in msg.lower() or "Device or resource busy" in msg:
@@ -668,7 +668,7 @@ def cmd_campaign(args):
                       f"campaign A={args.version_a} B={args.version_b} N={args.runs}")
 
     try:
-        ser = serial.Serial(args.port, args.baud, timeout=1)
+        ser = serial.Serial(args.port, args.baud, timeout=1, dsrdtr=False, rtscts=False)
     except serial.SerialException as e:
         msg = str(e)
         if "Permission" in msg or "busy" in msg.lower() or "Device or resource busy" in msg:
