@@ -100,6 +100,12 @@ def cmd_restore(_args):
     except Exception as e:
         sys.exit(f"ERROR reading backup: {e}")
 
+    # Normalize delta_patches: Lambda expects plain string keys, not dicts
+    patches = backup.get("delta_patches", {})
+    for k, v in list(patches.items()):
+        if isinstance(v, dict):
+            patches[k] = v.get("patch_key", v.get("key", ""))
+
     put_manifest(s3, backup)
     print(f"Restored {BACKUP_KEY} → manifest.json  "
           f"(latest_version={backup.get('latest_version')!r})")
