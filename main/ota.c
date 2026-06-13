@@ -77,12 +77,23 @@ static int read_patch_cb(void *arg_p, uint8_t *buf_p, size_t size)
     struct patch_state_t *s = (struct patch_state_t *)arg_p;
     size_t total = 0;
     int64_t t0 = metrics_now_us();
+    int zero_retries = 0;
     while (total < size) {
         int r = esp_http_client_read(s->http_client, (char *)(buf_p + total), size - total);
-        if (r <= 0) {
+        if (r < 0) {
             s->acc_http_us += metrics_now_us() - t0;
             return -1;
         }
+        if (r == 0) {
+            /* r=0 can occur transiently between TLS records; retry up to ~1 s */
+            if (++zero_retries > 100) {
+                s->acc_http_us += metrics_now_us() - t0;
+                return -1;
+            }
+            vTaskDelay(pdMS_TO_TICKS(10));
+            continue;
+        }
+        zero_retries = 0;
         total += r;
     }
     s->acc_http_us += metrics_now_us() - t0;

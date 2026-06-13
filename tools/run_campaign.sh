@@ -219,14 +219,23 @@ patch_ab = gen_and_upload_patch(bin_a, ver_a, bin_b, ver_b)
 patch_ba = gen_and_upload_patch(bin_b, ver_b, bin_a, ver_a)
 
 manifest.setdefault('delta_patches', {})
-manifest['delta_patches'][ver_a] = {'to': ver_b, 'patch_key': patch_ab}
-manifest['delta_patches'][ver_b] = {'to': ver_a, 'patch_key': patch_ba}
+# CI format: plain string (patch_key only); "to" version is always manifest.latest_version
+manifest['delta_patches'][ver_a] = patch_ab
+manifest['delta_patches'][ver_b] = patch_ba
+# Normalize any lingering dict-valued entries from old CI runs
+for k, v in list(manifest['delta_patches'].items()):
+    if isinstance(v, dict):
+        manifest['delta_patches'][k] = v.get('patch_key', v.get('key', ''))
 manifest['latest_version'] = ver_b  # device has A → will update to B on first poll
 
-s3.put_object(Bucket=bucket, Key='manifest.json',
-              Body=json.dumps(manifest, indent=2).encode(),
+body = json.dumps(manifest, indent=2).encode()
+s3.put_object(Bucket=bucket, Key='manifest.json', Body=body,
+              ContentType='application/json')
+# Keep the backup in sync with the clean format so harness restore doesn't corrupt it
+s3.put_object(Bucket=bucket, Key='manifest.backup.json', Body=body,
               ContentType='application/json')
 print(f'  manifest updated: latest={ver_b}')
+print(f'  manifest.backup.json updated with clean format')
 print(f'  delta_patches registered: {ver_a}→{ver_b}, {ver_b}→{ver_a}')
 PYEOF
 ok "Patches generated, encrypted, and manifest updated"
