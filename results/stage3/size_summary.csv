@@ -1,0 +1,8 @@
+region,bytes
+used_dram,35028
+dram_data,16716
+dram_bss,18312
+used_iram,95314
+flash_code,652651
+flash_rodata,191092
+total_size,956029

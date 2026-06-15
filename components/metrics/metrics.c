@@ -11,6 +11,7 @@
 #include "esp_app_desc.h"
 #include "esp_ota_ops.h"
 #include "esp_system.h"
+#include "esp_heap_caps.h"
 #include "nvs_flash.h"
 #include "nvs.h"
 
@@ -36,11 +37,11 @@ void metrics_emit(const char *event, const char *fmt, ...)
     }
 
     if (extra[0] != '\0') {
-        printf("##M## {\"v\":2,\"seq\":%" PRIu32 ",\"t_us\":%" PRId64
+        printf("##M## {\"v\":3,\"seq\":%" PRIu32 ",\"t_us\":%" PRId64
                ",\"fw\":\"%s\",\"dev\":\"%s\",\"ev\":\"%s\",%s}\n",
                seq, t, desc->version, CONFIG_METRICS_DEVICE_ID, event, extra);
     } else {
-        printf("##M## {\"v\":2,\"seq\":%" PRIu32 ",\"t_us\":%" PRId64
+        printf("##M## {\"v\":3,\"seq\":%" PRIu32 ",\"t_us\":%" PRId64
                ",\"fw\":\"%s\",\"dev\":\"%s\",\"ev\":\"%s\"}\n",
                seq, t, desc->version, CONFIG_METRICS_DEVICE_ID, event);
     }
@@ -74,8 +75,11 @@ void metrics_init(void)
     const char *part_label = part ? part->label : "unknown";
 
     metrics_emit("boot",
-                 "\"reset_reason\":%d,\"part\":\"%s\",\"prev_boot_marker\":%d,\"t_app_ms\":%" PRId64,
-                 reset_reason, part_label, (int)boot_pend, esp_timer_get_time() / 1000);
+                 "\"reset_reason\":%d,\"part\":\"%s\",\"prev_boot_marker\":%d,\"t_app_ms\":%" PRId64
+                 ",\"heap_total\":%u,\"stack_size\":%u",
+                 reset_reason, part_label, (int)boot_pend, esp_timer_get_time() / 1000,
+                 (unsigned)heap_caps_get_total_size(MALLOC_CAP_DEFAULT),
+                 (unsigned)CONFIG_OTA_TASK_STACK_SIZE);
 
     xTaskCreate(heartbeat_task, "metrics_hb", 3072, NULL, 3, NULL);
 }

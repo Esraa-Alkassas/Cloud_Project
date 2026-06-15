@@ -5,6 +5,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "esp_log.h"
+#include "esp_heap_caps.h"
 #include "esp_ota_ops.h"
 #include "esp_app_format.h"
 #include "esp_http_client.h"
@@ -279,6 +280,12 @@ void trigger_delta_ota_update(void)
     int64_t t_apply_wall_ms = 0;
     int64_t t_finalize_ms   = 0;
     uint32_t heap_min_during = 0;
+    /* v3 resource footprint fields */
+    uint32_t heap_start           = esp_get_free_heap_size();
+    uint32_t largest_block_start  = (uint32_t)heap_caps_get_largest_free_block(MALLOC_CAP_DEFAULT);
+    uint32_t largest_block_min    = 0;
+    uint32_t stack_hwm            = 0;
+    uint32_t part_size            = 0;
 
     int64_t t_ota_start = metrics_now_us();
     metrics_emit("ota_start",
@@ -342,6 +349,7 @@ void trigger_delta_ota_update(void)
         goto update_done;
     }
     ota_begin_ok = true;
+    part_size       = state.new_partition->size;
     heap_min_during = esp_get_minimum_free_heap_size();
 
     {
@@ -389,6 +397,8 @@ void trigger_delta_ota_update(void)
 
 update_done: {
     int64_t t_total_ms = (metrics_now_us() - t_ota_start) / 1000;
+    largest_block_min = (uint32_t)heap_caps_get_largest_free_block(MALLOC_CAP_DEFAULT);
+    stack_hwm         = (uint32_t)uxTaskGetStackHighWaterMark(NULL) * sizeof(StackType_t);
     metrics_emit("ota_summary",
                  "\"ok\":%d,\"err\":%d,\"is_delta\":%d"
                  ",\"t_total_ms\":%" PRId64 ",\"t_connect_ms\":%" PRId64
@@ -398,7 +408,10 @@ update_done: {
                  ",\"t_finalize_ms\":%" PRId64
                  ",\"b_patch\":%" PRId64 ",\"b_flash\":%" PRId64 ",\"b_from\":%" PRId64
                  ",\"calls_r\":%" PRId32 ",\"calls_w\":%" PRId32
-                 ",\"rssi\":%d,\"heap_min_during\":%" PRIu32,
+                 ",\"rssi\":%d,\"heap_min_during\":%" PRIu32
+                 ",\"heap_start\":%" PRIu32 ",\"largest_block_start\":%" PRIu32
+                 ",\"largest_block_min\":%" PRIu32 ",\"stack_hwm\":%" PRIu32
+                 ",\"part_size\":%" PRIu32,
                  finalize_ok ? 1 : 0, apply_res, is_delta ? 1 : 0,
                  t_total_ms, t_connect_ms,
                  t_apply_wall_ms,
@@ -408,7 +421,10 @@ update_done: {
                  t_finalize_ms,
                  state.bytes_patch_in, state.bytes_flash_out, state.bytes_from_read,
                  state.calls_read, state.calls_write,
-                 rssi, heap_min_during);
+                 rssi, heap_min_during,
+                 heap_start, largest_block_start,
+                 largest_block_min, stack_hwm,
+                 part_size);
 
     if (finalize_ok) {
         store_value("ota_fail_cnt", "0");

@@ -39,7 +39,7 @@ void app_main(void)
     xTaskCreate(&led_blink_task, "led_task", 3072, NULL, 5, NULL);
 #endif
 
-    xTaskCreate(&ota_task, "ota_task", 12288, NULL, 5, NULL);
+    xTaskCreate(&ota_task, "ota_task", CONFIG_OTA_TASK_STACK_SIZE, NULL, 5, NULL);
 
     ESP_LOGI(TAG, "app_main complete, tasks running.");
 }

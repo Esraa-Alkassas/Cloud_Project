@@ -10,6 +10,8 @@ Usage:
                      --experiment EXP_ID [--scenario MN1] [--note "..."] [--duration 600]
   harness.py export  --db runs.db --experiment EXP_ID --out exp.csv
   harness.py plot    --db runs.db --experiment EXP_ID --out plots/
+  harness.py plot3   --db runs.db --experiments MN_DELTA,MN_FULL,NU_DELTA \\
+                     [--size-csv results/stage3/size_report.csv] --out plots/
   harness.py tail    --port /dev/ttyUSB0 [--baud 115200]
   harness.py campaign --port /dev/ttyUSB0 --db runs.db --experiment EXP \\
                       --version-a VER_A --version-b VER_B --runs 10 [--settle 20]
@@ -27,11 +29,16 @@ import time
 from datetime import datetime, timezone
 
 METRIC_PREFIX = "##M## "
-SCHEMA_VERSION = 2
+SCHEMA_VERSIONS = (2, 3)   # accept both v2 (Stage 2) and v3 (Stage 3)
 
 PHASE_COLS = ["t_http", "t_decrypt", "t_from_read", "t_flash", "t_seek"]
 PHASE_LABELS = ["HTTP download", "AES decrypt", "Flash read (old)", "Flash write (new)", "Seek"]
 PHASE_COLORS = ["#4C72B0", "#DD8452", "#55A868", "#C44E52", "#8172B3"]
+
+# §0.2 supervision constants
+SILENCE_IDLE_S  = 60    # board considered hung if no serial line for this long while idle
+SILENCE_OTA_S   = 30    # stricter silence window while an OTA is in flight
+SILENCE_CAP_S   = 120   # silence window for standalone capture sessions
 
 
 # ---------------------------------------------------------------------------
@@ -71,6 +78,14 @@ def open_db(path: str) -> sqlite3.Connection:
             exp_id   TEXT,
             recv_utc REAL,
             raw      TEXT
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS run_failures (
+            id       INTEGER PRIMARY KEY AUTOINCREMENT,
+            exp_id   TEXT,
+            recv_utc REAL,
+            reason   TEXT
         )
     """)
     conn.execute("""
@@ -149,6 +164,14 @@ def insert_error(conn, exp_id, recv_utc, raw):
     conn.commit()
 
 
+def insert_run_failure(conn, exp_id, reason):
+    conn.execute(
+        "INSERT INTO run_failures (exp_id, recv_utc, reason) VALUES (?,?,?)",
+        (exp_id, time.time(), reason),
+    )
+    conn.commit()
+
+
 # ---------------------------------------------------------------------------
 # Line parsing
 # ---------------------------------------------------------------------------
@@ -159,7 +182,7 @@ def parse_metric_line(line: str):
         raise ValueError("not a metric line")
     payload = line[len(METRIC_PREFIX):].strip()
     obj = json.loads(payload)
-    if obj.get("v") != SCHEMA_VERSION:
+    if obj.get("v") not in SCHEMA_VERSIONS:
         raise ValueError(f"unknown schema version {obj.get('v')}")
     return obj
 
@@ -210,6 +233,40 @@ def compute_derived_for_summary(summary_payload: dict,
         elif frac > 0.25:
             print(f"  [WARN] t_unaccounted {frac:.0%} of wall time — investigate")
 
+    # --- Stage 3 v3 resource-footprint derived columns ---
+    heap_start = summary_payload.get("heap_start")
+    heap_min   = summary_payload.get("heap_min_during")
+    heap_total = (boot_payload or {}).get("heap_total")
+    stack_size = (boot_payload or {}).get("stack_size")
+    stack_hwm  = summary_payload.get("stack_hwm")
+    calls_w    = summary_payload.get("calls_w") or 0
+    part_size  = summary_payload.get("part_size")
+
+    if heap_start is not None and heap_min is not None:
+        d["heap_used"] = int(heap_start) - int(heap_min)
+        if heap_total:
+            d["heap_used_pct"] = round(d["heap_used"] / heap_total * 100, 2)
+        else:
+            d["heap_used_pct"] = None
+    else:
+        d["heap_used"] = None
+        d["heap_used_pct"] = None
+
+    if stack_size and stack_hwm is not None:
+        d["stack_used_pct"] = round((stack_size - stack_hwm) / stack_size * 100, 2)
+    else:
+        d["stack_used_pct"] = None
+
+    if b_flash and calls_w:
+        d["mean_bytes_per_write"] = round(b_flash / calls_w, 2)
+    else:
+        d["mean_bytes_per_write"] = None
+
+    if part_size and b_patch:
+        d["wear_ratio"] = round(part_size / b_patch, 2)
+    else:
+        d["wear_ratio"] = None
+
     return d
 
 
@@ -244,6 +301,7 @@ def cmd_capture(args):
     deadline = (time.monotonic() + args.duration) if args.duration else None
     last_seq  = None
     event_count = 0
+    last_line_time = time.monotonic()
 
     try:
         with open(rawlog, "w", encoding="utf-8", errors="replace") as logf:
@@ -251,12 +309,29 @@ def cmd_capture(args):
                 if deadline and time.monotonic() >= deadline:
                     print(f"\nDuration reached. {event_count} metric events stored.")
                     break
+
+                # §0.2 silence detection for capture
+                silence = time.monotonic() - last_line_time
+                if silence > SILENCE_CAP_S:
+                    print(f"\n  [capture] No data for {silence:.0f}s — attempting serial re-open")
+                    try:
+                        ser.close()
+                        time.sleep(1)
+                        ser = serial.Serial(args.port, args.baud, timeout=1,
+                                            dsrdtr=False, rtscts=False)
+                        last_line_time = time.monotonic()
+                        print("  [capture] Serial re-opened")
+                    except Exception as e:
+                        print(f"  [capture] Re-open failed: {e} — stopping")
+                        break
+
                 try:
                     raw = ser.readline().decode("utf-8", errors="replace").rstrip("\r\n")
                 except Exception:
                     continue
                 if not raw:
                     continue
+                last_line_time = time.monotonic()
                 logf.write(raw + "\n")
                 logf.flush()
                 recv_utc = time.time()
@@ -322,7 +397,10 @@ def cmd_export(args):
         all_payload_keys.update(r["_payload"].keys())
 
     derived_keys = ["goodput_kBps", "flash_kBps", "t_reboot_ms", "t_boot_app_ms",
-                    "t_downtime_ms", "t_unaccounted_ms"]
+                    "t_downtime_ms", "t_unaccounted_ms",
+                    # Stage 3 v3 derived
+                    "heap_used", "heap_used_pct", "stack_used_pct",
+                    "mean_bytes_per_write", "wear_ratio"]
     all_payload_keys.update(derived_keys)
 
     base_cols = ["id", "exp_id", "recv_utc", "dev", "fw", "seq", "t_us", "ev"]
@@ -391,6 +469,28 @@ def _load_ota_summaries(conn, exp_id):
         except Exception:
             pass
     return results
+
+
+def _load_boot_events(conn, exp_id):
+    """Return list of (recv_utc, payload) for boot events."""
+    rows = conn.execute(
+        "SELECT recv_utc, payload_json FROM events"
+        " WHERE exp_id=? AND ev='boot' ORDER BY id",
+        (exp_id,),
+    ).fetchall()
+    results = []
+    for r in rows:
+        try:
+            d = json.loads(r["payload_json"] or "{}")
+            results.append((r["recv_utc"], d))
+        except Exception:
+            pass
+    return results
+
+
+def _mean(vals):
+    vals = [v for v in vals if v is not None]
+    return sum(vals) / len(vals) if vals else None
 
 
 def cmd_plot(args):
@@ -580,6 +680,168 @@ def _plot_throughput_scatter(summaries, exp, out_dir):
     print(f"Throughput scatter → {p}")
 
 
+# ---------------------------------------------------------------------------
+# Stage 3 cross-experiment plots (plot3)
+# ---------------------------------------------------------------------------
+
+def cmd_plot3(args):
+    """Generate the three Stage 3 cross-experiment plots."""
+    try:
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        import numpy as np
+    except ImportError:
+        sys.exit("matplotlib/numpy not installed — run: pip install matplotlib numpy")
+
+    os.makedirs(args.out, exist_ok=True)
+    conn = open_db(args.db)
+    exp_ids = [e.strip() for e in args.experiments.split(",") if e.strip()]
+
+    # Gather per-experiment aggregate data
+    exp_data = {}
+    for exp_id in exp_ids:
+        summaries  = _load_ota_summaries(conn, exp_id)
+        boot_evs   = _load_boot_events(conn, exp_id)
+        ok_sums    = [s for s in summaries if s.get("ok") == 1]
+
+        heap_total = None
+        for _, bp in boot_evs:
+            if bp.get("heap_total"):
+                heap_total = bp["heap_total"]
+                break
+
+        heap_min_vals       = [s.get("heap_min_during") for s in ok_sums if s.get("heap_min_during")]
+        heap_start_vals     = [s.get("heap_start")      for s in ok_sums if s.get("heap_start")]
+        b_patch_vals        = [s.get("b_patch")         for s in ok_sums if s.get("b_patch")]
+        b_flash_vals        = [s.get("b_flash")         for s in ok_sums if s.get("b_flash")]
+        part_size_vals      = [s.get("part_size")       for s in ok_sums if s.get("part_size")]
+        heap_used_vals      = []
+        for s in ok_sums:
+            hs = s.get("heap_start")
+            hm = s.get("heap_min_during")
+            if hs is not None and hm is not None:
+                heap_used_vals.append(hs - hm)
+
+        exp_data[exp_id] = {
+            "heap_total":  heap_total,
+            "heap_min":    _mean(heap_min_vals),
+            "heap_start":  _mean(heap_start_vals),
+            "heap_used":   _mean(heap_used_vals),
+            "b_patch":     _mean(b_patch_vals),
+            "b_flash":     _mean(b_flash_vals),
+            "part_size":   _mean(part_size_vals),
+            "n_ok":        len(ok_sums),
+        }
+
+    conn.close()
+
+    labels = exp_ids
+    x = np.arange(len(labels))
+    width = 0.35
+
+    # ── Plot 1: Heap bar (lowest free heap + heap consumed + total reference) ──
+    fig, ax = plt.subplots(figsize=(max(6, len(labels) * 2.5), 5))
+
+    heap_min_kb   = [exp_data[e]["heap_min"]  / 1024 if exp_data[e]["heap_min"]  else 0
+                     for e in labels]
+    heap_used_kb  = [exp_data[e]["heap_used"] / 1024 if exp_data[e]["heap_used"] else 0
+                     for e in labels]
+    heap_total_kb = [exp_data[e]["heap_total"] / 1024 if exp_data[e]["heap_total"] else None
+                     for e in labels]
+
+    bars1 = ax.bar(x - width/2, heap_min_kb,  width, label="Lowest free heap (KB)",   color="#4C72B0")
+    bars2 = ax.bar(x + width/2, heap_used_kb, width, label="Heap consumed by OTA (KB)", color="#C44E52")
+
+    # Reference line: total heap (use first non-None value as it's constant)
+    ht = next((h for h in heap_total_kb if h), None)
+    if ht:
+        ax.axhline(ht, color="gray", linestyle="--", linewidth=1.5,
+                   label=f"Total heap ({ht:.0f} KB)")
+
+    ax.set_xticks(x)
+    ax.set_xticklabels(labels)
+    ax.set_ylabel("Heap (KB)")
+    ax.set_title("Memory footprint during OTA update")
+    ax.legend(fontsize=9)
+    p1 = os.path.join(args.out, "stage3_heap_bar.png")
+    fig.tight_layout(); fig.savefig(p1, dpi=120); plt.close(fig)
+    print(f"Heap bar → {p1}")
+
+    # ── Plot 2: Bytes bar (download / write / erase) — log scale ──
+    fig, ax = plt.subplots(figsize=(max(6, len(labels) * 2.5), 5))
+
+    b_patch_kb    = [exp_data[e]["b_patch"]   / 1024 if exp_data[e]["b_patch"]    else 1e-3
+                     for e in labels]
+    b_flash_kb    = [exp_data[e]["b_flash"]   / 1024 if exp_data[e]["b_flash"]    else 1e-3
+                     for e in labels]
+    part_size_kb  = [exp_data[e]["part_size"] / 1024 if exp_data[e]["part_size"]  else 1e-3
+                     for e in labels]
+
+    w3 = width * 0.9
+    ax.bar(x - w3,    b_patch_kb,   w3, label="Downloaded (kB)",      color="#4C72B0")
+    ax.bar(x,         b_flash_kb,   w3, label="Written to flash (kB)", color="#DD8452")
+    ax.bar(x + w3,    part_size_kb, w3, label="Erased (partition, kB)", color="#C44E52")
+
+    ax.set_yscale("log")
+    ax.set_xticks(x)
+    ax.set_xticklabels(labels)
+    ax.set_ylabel("Bytes (log scale)")
+    ax.set_title("OTA data-volume breakdown — fixed-erase cost vs patch size")
+    ax.legend(fontsize=9)
+    p2 = os.path.join(args.out, "stage3_bytes_bar.png")
+    fig.tight_layout(); fig.savefig(p2, dpi=120); plt.close(fig)
+    print(f"Bytes bar → {p2}")
+
+    # ── Plot 3: Component sizes from size_report.csv ──
+    if args.size_csv and os.path.exists(args.size_csv):
+        _plot_component_sizes(args.size_csv, args.out)
+    else:
+        print(f"  [plot3] size_csv not found ({args.size_csv}) — skipping component plot")
+
+
+def _plot_component_sizes(size_csv: str, out_dir: str):
+    """Horizontal bar of updater component sizes from size_report.csv."""
+    try:
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+    except ImportError:
+        return
+
+    components = {}
+    with open(size_csv, newline="") as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            name = row.get("component", "").strip()
+            try:
+                total = int(row.get("total_bytes", 0) or 0)
+            except (ValueError, TypeError):
+                total = 0
+            if name and total > 0:
+                components[name] = total
+
+    if not components:
+        print("  [plot3] size_report.csv has no component data — skipping")
+        return
+
+    # Sort by size descending
+    items = sorted(components.items(), key=lambda x: x[1], reverse=True)
+    names  = [i[0] for i in items]
+    sizes  = [i[1] / 1024 for i in items]   # kB
+
+    fig, ax = plt.subplots(figsize=(8, max(4, len(names) * 0.45)))
+    bars = ax.barh(names[::-1], sizes[::-1], color="#4C72B0")
+    ax.set_xlabel("Size (kB)")
+    ax.set_title("Updater component flash footprint")
+    for bar, sz in zip(bars, sizes[::-1]):
+        ax.text(bar.get_width() + 0.5, bar.get_y() + bar.get_height() / 2,
+                f"{sz:.1f} kB", va="center", fontsize=8)
+    p = os.path.join(out_dir, "stage3_component_sizes.png")
+    fig.tight_layout(); fig.savefig(p, dpi=120); plt.close(fig)
+    print(f"Component sizes → {p}")
+
+
 def cmd_tail(args):
     try:
         import serial
@@ -632,7 +894,7 @@ def _flip_manifest(version: str, flip_script: str):
     """Call flip_manifest.py set-latest --version <version>."""
     result = subprocess.run(
         [sys.executable, flip_script, "set-latest", "--version", version],
-        capture_output=True, text=True
+        capture_output=True, text=True, timeout=30
     )
     if result.returncode != 0:
         raise RuntimeError(f"flip_manifest failed:\n{result.stderr.strip()}")
@@ -640,14 +902,17 @@ def _flip_manifest(version: str, flip_script: str):
 
 
 def _restore_manifest(flip_script: str):
-    result = subprocess.run(
-        [sys.executable, flip_script, "restore"],
-        capture_output=True, text=True
-    )
-    if result.returncode != 0:
-        print(f"  [manifest] restore warning: {result.stderr.strip()}")
-    else:
-        print("  [manifest] restored")
+    try:
+        result = subprocess.run(
+            [sys.executable, flip_script, "restore"],
+            capture_output=True, text=True, timeout=30
+        )
+        if result.returncode != 0:
+            print(f"  [manifest] restore warning: {result.stderr.strip()}")
+        else:
+            print("  [manifest] restored")
+    except Exception as e:
+        print(f"  [manifest] restore error: {e}")
 
 
 def cmd_campaign(args):
@@ -677,33 +942,32 @@ def cmd_campaign(args):
 
     # ------------------------------------------------------------------
     # State machine
-    # IDLE          → waiting for any event to learn current fw
-    # NEED_FLIP     → fw known, about to flip manifest
-    # WAITING_OTA   → manifest flipped, waiting for ota_summary
-    # WAITING_BOOT  → ota_summary(ok=1) received, waiting for subsequent boot
     # ------------------------------------------------------------------
-    STATE_IDLE        = "IDLE"
-    STATE_NEED_FLIP   = "NEED_FLIP"
-    STATE_WAITING_OTA = "WAITING_OTA"
+    STATE_IDLE         = "IDLE"
+    STATE_NEED_FLIP    = "NEED_FLIP"
+    STATE_WAITING_OTA  = "WAITING_OTA"
     STATE_WAITING_BOOT = "WAITING_BOOT"
 
     state          = STATE_IDLE
-    fw_current     = None          # firmware version the device is currently running
+    fw_current     = None
     run_num        = 0
     consecutive_failures = 0
-    runs_a2b       = 0             # completed A→B runs
-    runs_b2a       = 0             # completed B→A runs
+    circuit_breaker_limit = getattr(args, "max_failures", 3)
+    runs_a2b       = 0
+    runs_b2a       = 0
     target_runs    = args.runs
 
     # Per-run bookkeeping
     summary_payload  = {}
     recv_utc_summary = None
     recv_utc_reboot  = None
+    boot_payload_cur = {}
     direction        = None
 
-    # Timeout tracking
+    # Timing
     state_entered_at = time.monotonic()
-    OTA_TIMEOUT      = 10 * 60    # 10 minutes
+    last_line_time   = time.monotonic()
+    OTA_TIMEOUT      = 10 * 60    # 10 min hard wall-clock per run
 
     last_seq  = None
     log_f     = open(rawlog, "w", encoding="utf-8", errors="replace")
@@ -716,15 +980,16 @@ def cmd_campaign(args):
 
     def _record_run(ok, fw_from, fw_to, direction, summary_p,
                     recv_utc_s, recv_utc_r, recv_utc_b, boot_p, notes=""):
-        """Insert a completed run into the runs table."""
         if ok and recv_utc_r and recv_utc_b:
             derived = compute_derived_for_summary(summary_p, recv_utc_r, recv_utc_b, boot_p)
         else:
             derived = {k: None for k in ["goodput_kBps", "flash_kBps", "t_reboot_ms",
-                                          "t_boot_app_ms", "t_downtime_ms", "t_unaccounted_ms"]}
+                                          "t_boot_app_ms", "t_downtime_ms", "t_unaccounted_ms",
+                                          "heap_used", "heap_used_pct", "stack_used_pct",
+                                          "mean_bytes_per_write", "wear_ratio"]}
         valid = 1 if (ok
                       and summary_p.get("rssi", -999) >= args.rssi_min
-                      and derived.get("t_unaccounted_ms", -1) is not None
+                      and derived.get("t_unaccounted_ms") is not None
                       and derived.get("t_unaccounted_ms", -1) >= 0) else 0
         conn.execute("""
             INSERT INTO runs (
@@ -770,6 +1035,8 @@ def cmd_campaign(args):
              valid, notes)
         )
         conn.commit()
+        if not ok:
+            insert_run_failure(conn, args.experiment, notes)
         status = "VALID" if valid else "EXCLUDED"
         print(f"\n  [run {run_num}] {direction}: ok={ok} valid={valid} ({status})"
               f"  t_total={summary_p.get('t_total_ms')} ms"
@@ -786,9 +1053,9 @@ def cmd_campaign(args):
 
     try:
         while True:
-            # Abort condition
-            if consecutive_failures >= 3:
-                print("\nERROR: 3 consecutive failures — aborting campaign.")
+            # Circuit breaker
+            if consecutive_failures >= circuit_breaker_limit:
+                print(f"\nERROR: {circuit_breaker_limit} consecutive failures — aborting campaign.")
                 break
             if runs_a2b >= target_runs and runs_b2a >= target_runs:
                 print(f"\nCampaign complete: {runs_a2b} A→B runs, {runs_b2a} B→A runs.")
@@ -796,6 +1063,40 @@ def cmd_campaign(args):
 
             raw = _read_line()
             now = time.monotonic()
+
+            # §0.2 silence detection
+            if raw:
+                last_line_time = now
+
+            silence_limit   = SILENCE_OTA_S if state in (STATE_WAITING_OTA, STATE_WAITING_BOOT) \
+                              else SILENCE_IDLE_S
+            silence_elapsed = now - last_line_time
+            if silence_elapsed > silence_limit:
+                print(f"\n  [campaign] SILENCE {silence_elapsed:.0f}s in {state} — "
+                      f"attempting serial recovery")
+                try:
+                    ser.close()
+                    time.sleep(2)
+                    ser = serial.Serial(args.port, args.baud, timeout=1,
+                                        dsrdtr=False, rtscts=False)
+                    last_line_time = now
+                    print("  [campaign] Serial re-opened")
+                except Exception as e:
+                    print(f"  [campaign] Serial recovery failed: {e}")
+
+                # If mid-OTA, record as timed-out failure
+                if state in (STATE_WAITING_OTA, STATE_WAITING_BOOT):
+                    run_num += 1
+                    _record_run(False, fw_current or "?",
+                                args.version_b if fw_current == args.version_a else args.version_a,
+                                direction or "?", summary_payload,
+                                recv_utc_summary, recv_utc_reboot, None, {}, "silence_timeout")
+                    consecutive_failures += 1
+                    state = STATE_IDLE
+                    state_entered_at = now
+
+                last_line_time = now
+                continue
 
             if raw:
                 log_f.write(raw + "\n")
@@ -819,11 +1120,11 @@ def cmd_campaign(args):
                                  if k not in ("v", "seq", "t_us", "fw", "dev", "ev")}
                         insert_event(conn, args.experiment, recv_utc, parsed)
 
-                        # Seq gap tracking
                         if ev == "boot":
                             if last_seq is not None:
                                 print(f"\n  [NOTICE] Device rebooted (seq {last_seq} → {seq})")
                             last_seq = seq
+                            boot_payload_cur = extra
                         else:
                             if last_seq is not None and seq != last_seq + 1:
                                 print(f"\n  [NOTICE] seq gap {last_seq+1}…{seq}")
@@ -839,12 +1140,10 @@ def cmd_campaign(args):
                                 state_entered_at = now
 
                         elif state == STATE_NEED_FLIP:
-                            # Determine which direction we need
                             target = (args.version_b if fw_current == args.version_a
                                       else args.version_a)
-                            # Check if we still need this direction
                             if fw_current == args.version_a and runs_a2b >= target_runs:
-                                state = STATE_IDLE  # don't flip; wait for other direction
+                                state = STATE_IDLE
                             elif fw_current == args.version_b and runs_b2a >= target_runs:
                                 state = STATE_IDLE
                             else:
@@ -855,9 +1154,11 @@ def cmd_campaign(args):
                                 summary_payload  = {}
                                 recv_utc_summary = None
                                 recv_utc_reboot  = None
+                                boot_payload_cur = {}
                                 state = STATE_WAITING_OTA
                                 state_entered_at = now
-                                print(f"\n  [campaign] Waiting for OTA {direction}  (timeout {OTA_TIMEOUT}s)")
+                                print(f"\n  [campaign] Waiting for OTA {direction} "
+                                      f"(timeout {OTA_TIMEOUT}s)")
 
                         elif state == STATE_WAITING_OTA:
                             if ev == "ota_summary":
@@ -869,7 +1170,6 @@ def cmd_campaign(args):
                                     state_entered_at = now
                                     print(f"\n  [campaign] ota_summary ok=1, waiting for boot")
                                 else:
-                                    # Failed OTA — record it
                                     _record_run(False, fw_current,
                                                 args.version_b if fw_current == args.version_a
                                                 else args.version_a,
@@ -883,17 +1183,15 @@ def cmd_campaign(args):
 
                         elif state == STATE_WAITING_BOOT:
                             if ev == "ota_reboot":
-                                recv_utc_reboot = recv_utc  # capture if missed above
+                                recv_utc_reboot = recv_utc
                             elif ev == "boot":
-                                fw_new      = fw
-                                boot_p      = extra
-                                recv_utc_b  = recv_utc
-                                ok_run      = (fw_new in (args.version_a, args.version_b)
-                                               and fw_new != fw_current)
-                                if fw_new == args.version_a:
-                                    pass  # B→A completed
-                                fw_target = (args.version_b if fw_current == args.version_a
-                                             else args.version_a)
+                                fw_new     = fw
+                                boot_p     = extra
+                                recv_utc_b = recv_utc
+                                ok_run     = (fw_new in (args.version_a, args.version_b)
+                                              and fw_new != fw_current)
+                                fw_target  = (args.version_b if fw_current == args.version_a
+                                              else args.version_a)
                                 _record_run(ok_run, fw_current, fw_target,
                                             direction, summary_payload,
                                             recv_utc_summary, recv_utc_reboot, recv_utc_b,
@@ -908,12 +1206,14 @@ def cmd_campaign(args):
                                     consecutive_failures += 1
 
                                 fw_current = fw_new
+                                boot_payload_cur = extra
                                 print(f"\n  [campaign] settle {args.settle} s ...")
                                 time.sleep(args.settle)
                                 state = STATE_NEED_FLIP
                                 state_entered_at = now
+                                last_line_time   = time.monotonic()
 
-            # Timeout check
+            # Per-run watchdog (OTA_TIMEOUT)
             if state in (STATE_WAITING_OTA, STATE_WAITING_BOOT):
                 elapsed = now - state_entered_at
                 if elapsed > OTA_TIMEOUT:
@@ -922,7 +1222,7 @@ def cmd_campaign(args):
                     _record_run(False, fw_current or "?",
                                 args.version_b if (fw_current == args.version_a) else args.version_a,
                                 direction or "?", summary_payload,
-                                recv_utc_summary, recv_utc_reboot, None, {}, "timeout")
+                                recv_utc_summary, recv_utc_reboot, None, {}, "watchdog_timeout")
                     consecutive_failures += 1
                     state = STATE_IDLE
                     state_entered_at = now
@@ -931,7 +1231,10 @@ def cmd_campaign(args):
         print("\nCampaign interrupted by user.")
     finally:
         log_f.close()
-        ser.close()
+        try:
+            ser.close()
+        except Exception:
+            pass
         _restore_manifest(flip_script)
         conn.close()
 
@@ -978,6 +1281,15 @@ def main():
     p.add_argument("--experiment", required=True)
     p.add_argument("--out",        default="plots/")
 
+    # plot3 — Stage 3 cross-experiment plots
+    p = sub.add_parser("plot3", help="Stage 3 cross-experiment resource-footprint plots")
+    p.add_argument("--db",          required=True)
+    p.add_argument("--experiments", required=True,
+                   help="Comma-separated experiment IDs (e.g. MN_DELTA,MN_FULL,NU_DELTA)")
+    p.add_argument("--size-csv",    default=None, dest="size_csv",
+                   help="Path to size_report.csv for component-size plot")
+    p.add_argument("--out",         default="plots/")
+
     # tail
     p = sub.add_parser("tail", help="Pretty-print live serial output (no DB)")
     p.add_argument("--port", default="/dev/ttyUSB0")
@@ -985,26 +1297,29 @@ def main():
 
     # campaign
     p = sub.add_parser("campaign", help="Automated N-run OTA ping-pong campaign")
-    p.add_argument("--port",        default="/dev/ttyUSB0")
-    p.add_argument("--baud",        type=int, default=115200)
-    p.add_argument("--db",          required=True)
-    p.add_argument("--experiment",  required=True)
-    p.add_argument("--version-a",   required=True, dest="version_a",
-                   help="Firmware version string A (e.g. 1748000000-ab12cd3)")
-    p.add_argument("--version-b",   required=True, dest="version_b",
-                   help="Firmware version string B")
-    p.add_argument("--runs",        type=int, default=10,
+    p.add_argument("--port",         default="/dev/ttyUSB0")
+    p.add_argument("--baud",         type=int, default=115200)
+    p.add_argument("--db",           required=True)
+    p.add_argument("--experiment",   required=True)
+    p.add_argument("--version-a",    required=True, dest="version_a",
+                   help="Firmware version string A (e.g. s3-base)")
+    p.add_argument("--version-b",    required=True, dest="version_b",
+                   help="Firmware version string B (e.g. s3-mn1)")
+    p.add_argument("--runs",         type=int, default=10,
                    help="Target completed runs per direction (default 10)")
-    p.add_argument("--settle",      type=int, default=20,
+    p.add_argument("--settle",       type=int, default=20,
                    help="Seconds to wait between flips (default 20)")
-    p.add_argument("--rssi-min",    type=int, default=-75, dest="rssi_min",
+    p.add_argument("--rssi-min",     type=int, default=-75, dest="rssi_min",
                    help="Minimum RSSI dBm for a valid run (default -75)")
+    p.add_argument("--max-failures", type=int, default=3, dest="max_failures",
+                   help="Circuit-breaker: abort after N consecutive failures (default 3)")
 
     args = parser.parse_args()
     {
         "capture":  cmd_capture,
         "export":   cmd_export,
         "plot":     cmd_plot,
+        "plot3":    cmd_plot3,
         "tail":     cmd_tail,
         "campaign": cmd_campaign,
     }[args.cmd](args)

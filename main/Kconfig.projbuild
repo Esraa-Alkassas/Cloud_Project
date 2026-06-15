@@ -112,4 +112,11 @@ menu "OTA / Metrics Configuration"
             Distorts timing measurements due to UART overhead; NEVER enable
             during timed campaign runs. Useful only for debugging the OTA path.
 
+    config OTA_TASK_STACK_SIZE
+        int "OTA task stack size (bytes)"
+        default 12288
+        help
+            Stack size in bytes for the ota_task. Emitted in the boot event as
+            stack_size so the harness can compute stack_used_pct.
+
 endmenu
