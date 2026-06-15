@@ -1,0 +1,56 @@
+{
+  "sweep": [
+    {
+      "k": 1,
+      "elapsed_s_mean": 0.5837249959998493,
+      "elapsed_s_std": 0.04505113437912612,
+      "elapsed_s_min": 0.5512498329990194,
+      "elapsed_s_max": 0.6474328830008744,
+      "n_patches": 1,
+      "mean_patch_bytes": 488435.0,
+      "total_patch_bytes": 488435
+    },
+    {
+      "k": 2,
+      "elapsed_s_mean": 1.139449399667986,
+      "elapsed_s_std": 0.005266459605381248,
+      "elapsed_s_min": 1.1320756119966973,
+      "elapsed_s_max": 1.1440439480065834,
+      "n_patches": 2,
+      "mean_patch_bytes": 491217.0,
+      "total_patch_bytes": 982434
+    },
+    {
+      "k": 4,
+      "elapsed_s_mean": 2.2790723366682264,
+      "elapsed_s_std": 0.01717168000101767,
+      "elapsed_s_min": 2.2639278630012996,
+      "elapsed_s_max": 2.303084876999492,
+      "n_patches": 4,
+      "mean_patch_bytes": 490691.5,
+      "total_patch_bytes": 1962766
+    },
+    {
+      "k": 8,
+      "elapsed_s_mean": 4.59532368866591,
+      "elapsed_s_std": 0.05375295424754255,
+      "elapsed_s_min": 4.536053547002666,
+      "elapsed_s_max": 4.66618202799873,
+      "n_patches": 8,
+      "mean_patch_bytes": 489574.125,
+      "total_patch_bytes": 3916593
+    },
+    {
+      "k": 16,
+      "elapsed_s_mean": 9.17719645533604,
+      "elapsed_s_std": 0.18472838514922865,
+      "elapsed_s_min": 8.923115962003067,
+      "elapsed_s_max": 9.356859810999595,
+      "n_patches": 16,
+      "mean_patch_bytes": 489577.6875,
+      "total_patch_bytes": 7833243
+    }
+  ],
+  "new_binary": "wc-1.bin",
+  "corpus_size": 10
+}

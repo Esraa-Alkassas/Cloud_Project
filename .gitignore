@@ -23,3 +23,13 @@ ehthumbs.db
 Thumbs.db
 
 version.txt
+
+# Corpus firmware binaries (large; reproduced via build_corpus.py)
+corpus/bins/*.bin
+
+# Per-build idf.py logs (large; regenerated per run)
+results/stage1/build_*.log
+results/stage1/bench_run.log
+
+# Raw patch files (large; reproduced via bench_diff.py run)
+results/stage1/patches/
