@@ -222,4 +222,4 @@ All figures are **MODEL ESTIMATES**. Free-tier calculation assumes this is the o
 - [x] `REPORT_stage4.md` and `summary.md` written and consistent with CSVs/JSONs.
 - [x] All work on `feat/runtim-mesurments`.
 
-**Final commit:** (see `git log` on `feat/runtim-mesurments` after this commit)
+**Final commit:** `2f64349` on `feat/runtim-mesurments`
