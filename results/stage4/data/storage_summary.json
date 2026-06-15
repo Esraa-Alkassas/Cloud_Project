@@ -1,0 +1,32 @@
+{
+  "total_objects": 867,
+  "full_binaries": {
+    "count": 51,
+    "total_bytes": 50851824
+  },
+  "ci_binaries": {
+    "count": 40,
+    "total_bytes": 40335888
+  },
+  "corpus_bins": {
+    "count": 11,
+    "total_bytes": 10515936
+  },
+  "patches": {
+    "count": 814,
+    "total_bytes": 452266927
+  },
+  "manifests": {
+    "count": 2,
+    "total_bytes": 7966
+  },
+  "other": {
+    "count": 0,
+    "total_bytes": 0
+  },
+  "grand_total_bytes": 503126717,
+  "avg_full_bin_bytes": 1008397.2,
+  "avg_patch_bytes": 555610.4754299754,
+  "n_ci_versions": 40,
+  "n_patches": 814
+}

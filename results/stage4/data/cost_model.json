@@ -1,0 +1,85 @@
+{
+  "pricing": {
+    "lambda_req_per_M": 0.2,
+    "lambda_gb_s": 1.66667e-05,
+    "apigw_req_per_M": 1.0,
+    "s3_storage_gb_month": 0.023,
+    "s3_get_per_1k": 0.0004,
+    "s3_put_per_1k": 0.005,
+    "s3_transfer_out_gb": 0.09,
+    "free_lambda_req_M": 1.0,
+    "free_lambda_gb_s": 400000.0,
+    "free_s3_storage_gb": 5.0,
+    "free_s3_get_1k": 20.0,
+    "free_s3_put_1k": 2.0,
+    "free_apigw_req_M": 1.0,
+    "_pricing_url": "https://aws.amazon.com/lambda/pricing/ https://aws.amazon.com/s3/pricing/ https://aws.amazon.com/api-gateway/pricing/",
+    "_pricing_date": "2026-06-15",
+    "_region": "us-east-1"
+  },
+  "inputs": {
+    "lambda_billed_ms_warm": 108.22,
+    "lambda_billed_ms_cold": 898.52,
+    "lambda_mem_mb": 128.0,
+    "delta_patch_bytes": 65110,
+    "full_image_bytes": 955656,
+    "cold_start_fraction": 0.064
+  },
+  "per_update": {
+    "delta": {
+      "label": "delta",
+      "lambda_usd": 5.308323283299999e-07,
+      "apigw_usd": 1e-06,
+      "s3_get_usd": 8.000000000000001e-07,
+      "s3_transfer_usd": 5.457457154989242e-06,
+      "total_usd": 7.788289483319242e-06,
+      "bytes_transferred": 65110
+    },
+    "full": {
+      "label": "full",
+      "lambda_usd": 5.308323283299999e-07,
+      "apigw_usd": 1e-06,
+      "s3_get_usd": 8.000000000000001e-07,
+      "s3_transfer_usd": 8.010216057300567e-05,
+      "total_usd": 8.243299290133567e-05,
+      "bytes_transferred": 955656
+    }
+  },
+  "rollout_1000_devices": {
+    "delta": {
+      "n_devices": 1000,
+      "label": "delta",
+      "lambda_usd": 0.00053083232833,
+      "apigw_usd": 0.001,
+      "s3_get_usd": 0.0008,
+      "s3_xfer_usd": 0.0054574571549892426,
+      "total_usd": 0.007788289483319243,
+      "data_out_gb": 0.060638412833213806
+    },
+    "full": {
+      "n_devices": 1000,
+      "label": "full",
+      "lambda_usd": 0.00053083232833,
+      "apigw_usd": 0.001,
+      "s3_get_usd": 0.0008,
+      "s3_xfer_usd": 0.08010216057300568,
+      "total_usd": 0.08243299290133567,
+      "data_out_gb": 0.8900240063667297
+    },
+    "delta_free_tier": {
+      "lambda_duration_saving_usd": 0.00022545878425,
+      "apigw_saving_usd": 0.001,
+      "s3_get_saving_usd": 0.0008,
+      "total_saving_usd": 0.00202545878425,
+      "after_free_tier_usd": 0.005762830699069243
+    },
+    "full_free_tier": {
+      "lambda_duration_saving_usd": 0.00022545878425,
+      "apigw_saving_usd": 0.001,
+      "s3_get_saving_usd": 0.0008,
+      "total_saving_usd": 0.00202545878425,
+      "after_free_tier_usd": 0.08040753411708566
+    }
+  },
+  "_note": "All figures are MODEL ESTIMATES. Assumes blended warm/cold Lambda, one check+one download per device. Free-tier calculation assumes this is the only workload in the billing month. Data transfer assumes all downloads go via S3 presigned URLs (no CloudFront)."
+}
